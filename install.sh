@@ -165,12 +165,25 @@ if [ -f "$CONFIG_TXT" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 8. Done. Mark installed, disable the firstboot unit so it never runs
-#    again, and reboot straight into the kiosk.
+# 8. Done. Mark installed and reboot straight into the kiosk.
+#
+#    Two hard-won rules from real-hardware failure (2026-07-04):
+#    - NEVER `systemctl disable gost-firstboot` from inside this script:
+#      disabling the very unit whose start job is still running wedged
+#      systemctl on trixie and the whole install died on a start timeout.
+#      The unit's ConditionPathExists=!/opt/gost/.installed already
+#      guarantees it never runs again -- the marker file is the off switch.
+#    - NEVER call `reboot` synchronously from inside the unit either: the
+#      shutdown transaction conflicts with our own still-running start job.
+#      Schedule it detached so this script exits 0 and completes its start
+#      job cleanly, THEN the reboot fires.
 # ---------------------------------------------------------------------------
 touch "$GOST_HOME/.installed"
-systemctl disable gost-firstboot.service 2>/dev/null || true
 
-log "install complete -- rebooting into kiosk"
-sleep 2
-reboot || true
+log "install complete -- rebooting into kiosk in a few seconds"
+if [ -d /run/systemd/system ] && command -v systemd-run >/dev/null 2>&1; then
+  systemd-run --on-active=3 --quiet systemctl reboot || { (sleep 3; reboot) & }
+else
+  (sleep 3; reboot) &
+fi
+exit 0

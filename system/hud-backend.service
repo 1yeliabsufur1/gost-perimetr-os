@@ -2,6 +2,9 @@
 Description=GOST/PERIMETR OS backend (telemetry, TV/guide engine, kiosk control)
 After=network.target
 Wants=network.target
+# Appliance rule: never rate-limit into a permanent 'failed' state -- keep
+# retrying forever (default is give-up after 5 starts in 10s).
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple

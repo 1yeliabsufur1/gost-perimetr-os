@@ -8,7 +8,9 @@ ConditionPathExists=!/opt/gost/.installed
 Type=oneshot
 ExecStartPre=/bin/sh -c 'echo "\n*** GOST/PERIMETR OS FIRST-BOOT INSTALL ***\n*** Takes ~10 minutes with internet connected -- reboots into the dashboard when done. ***\n*** Do NOT power off. Default login if you need a shell: gost / gost ***\n" > /dev/tty1 || true'
 ExecStart=/opt/gost-src/install.sh
-TimeoutStartSec=0
+# "infinity", not "0": trixie's systemd start-timed-out a ~4.5-minute
+# install with the 0 spelling (observed on real hardware 2026-07-04).
+TimeoutStartSec=infinity
 # journal+console so install progress is visible on the attached screen
 # instead of leaving the operator staring at a bare login prompt.
 StandardOutput=journal+console

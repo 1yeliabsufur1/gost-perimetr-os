@@ -3,6 +3,10 @@ Description=GOST/PERIMETR OS kiosk (cage + chromium)
 After=hud-backend.service getty@tty1.service
 Wants=hud-backend.service
 Conflicts=getty@tty1.service
+# Appliance rule: never rate-limit into a permanent 'failed' state -- if
+# cage/chromium crash-loop, keep retrying (with RestartSec pacing) instead
+# of giving the screen back to a login prompt forever.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
