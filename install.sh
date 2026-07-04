@@ -43,6 +43,21 @@ done
 #    it needs swig AND headers to link against -llgpio.
 # ---------------------------------------------------------------------------
 export DEBIAN_FRONTEND=noninteractive
+
+# network-online.target can fire before DHCP actually lands on some trixie
+# setups. Wait up to 5 minutes for real connectivity; if it never comes,
+# apt fails, set -e exits, and the still-enabled firstboot unit simply
+# retries on the next boot -- no half-installed state.
+log "waiting for network..."
+for _ in $(seq 1 60); do
+  if curl -fs --max-time 5 -o /dev/null http://deb.debian.org 2>/dev/null || \
+     ping -c1 -W2 1.1.1.1 >/dev/null 2>&1; then
+    log "network is up"
+    break
+  fi
+  sleep 5
+done
+
 apt-get update
 
 apt-get install -y \
