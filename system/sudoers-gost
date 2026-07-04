@@ -1,0 +1,6 @@
+# Installed to /etc/sudoers.d/gost by install.sh (validated with `visudo -c`
+# before being put in place). Lets the operator user set their own system
+# password and system clock from the kiosk UI without a sudo password
+# prompt, restricted to these exact helper scripts.
+__GOST_USER__ ALL=(root) NOPASSWD: /usr/local/sbin/gost-setpass
+__GOST_USER__ ALL=(root) NOPASSWD: /usr/local/sbin/gost-settime

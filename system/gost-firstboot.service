@@ -1,0 +1,15 @@
+[Unit]
+Description=GOST/PERIMETR OS first-boot self-installer (runs once, then disables itself)
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=!/opt/gost/.installed
+
+[Service]
+Type=oneshot
+ExecStart=/opt/gost-src/install.sh
+TimeoutStartSec=0
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

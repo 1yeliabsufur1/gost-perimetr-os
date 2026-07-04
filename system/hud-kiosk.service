@@ -1,0 +1,24 @@
+[Unit]
+Description=GOST/PERIMETR OS kiosk (cage + chromium)
+After=hud-backend.service getty@tty1.service
+Wants=hud-backend.service
+Conflicts=getty@tty1.service
+
+[Service]
+Type=simple
+User=__GOST_USER__
+PAMName=login
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+StandardInput=tty
+StandardOutput=journal
+StandardError=journal
+UtmpIdentifier=tty1
+ExecStart=/opt/gost/system/kiosk-start.sh
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=graphical.target

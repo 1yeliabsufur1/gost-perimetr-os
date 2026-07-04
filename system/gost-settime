@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Sets the system clock. Reads exactly one line from stdin -- a timestamp
+# `timedatectl` understands, e.g. "2026-07-04 21:30:00". This unit has no
+# guaranteed internet or GPS fix at first boot, so the operator needs a way
+# to set the clock by hand from the kiosk UI.
+# Installed to /usr/local/sbin/gost-settime; whitelisted in /etc/sudoers.d/gost
+# for NOPASSWD execution by the operator user only, on this exact path.
+set -euo pipefail
+
+read -r NEWTIME
+
+if [ -z "$NEWTIME" ]; then
+  echo "gost-settime: no timestamp given" >&2
+  exit 1
+fi
+
+# A manual set is pointless if NTP immediately overwrites it the next time
+# the network comes up -- turn NTP sync off first (re-enable it any time via
+# `timedatectl set-ntp true`, e.g. once Wi-Fi is reliable).
+timedatectl set-ntp false || true
+timedatectl set-time "$NEWTIME"

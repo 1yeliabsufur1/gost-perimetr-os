@@ -1,0 +1,94 @@
+name: Build GOST/PERIMETR OS image
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - 'backend/**'
+      - 'system/**'
+      - 'media/**'
+      - 'install.sh'
+      - '.github/workflows/build-image.yml'
+
+# Two-stage boot: this workflow only bakes the firstboot self-installer into
+# a stock Raspberry Pi OS image. install.sh (apt + venv + services + media
+# skeleton) runs on the Pi itself the first time it boots with network up.
+# Expect roughly 3 minutes and a ~640MB compressed artifact.
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Raspberry Pi OS Lite arm64 (trixie)
+        run: |
+          # Raspberry Pi Foundation's stable "latest" redirect -- always
+          # resolves to the current Lite arm64 release (trixie at time of
+          # writing). If this ever 404s, downloads.raspberrypi.com/os is the
+          # canonical source to re-derive it from.
+          curl -L -o rpios.img.xz "https://downloads.raspberrypi.com/raspios_lite_arm64_latest"
+          # xz -d on rpios.img.xz always yields rpios.img -- no rename needed
+          # (a mv-onto-itself here exits 1 and kills the job).
+          xz -d rpios.img.xz
+          ls -lh rpios.img
+
+      - name: Loop-mount boot + root partitions
+        id: mount
+        run: |
+          sudo losetup -d /dev/loop100 2>/dev/null || true
+          LOOPDEV="$(sudo losetup -fP --show rpios.img)"
+          echo "loopdev=$LOOPDEV" >> "$GITHUB_OUTPUT"
+          sleep 1
+          mkdir -p boot root
+          sudo mount "${LOOPDEV}p1" boot
+          sudo mount "${LOOPDEV}p2" root
+
+      - name: Install project source + firstboot service
+        run: |
+          sudo mkdir -p root/opt/gost-src
+          sudo cp -r app backend system media install.sh README.md root/opt/gost-src/
+          sudo chmod +x \
+            root/opt/gost-src/install.sh \
+            root/opt/gost-src/system/kiosk-start.sh \
+            root/opt/gost-src/system/gost-setpass
+          sudo ln -sf /opt/gost-src/system/gost-firstboot.service \
+            root/etc/systemd/system/gost-firstboot.service
+          sudo mkdir -p root/etc/systemd/system/multi-user.target.wants
+          sudo ln -sf /etc/systemd/system/gost-firstboot.service \
+            root/etc/systemd/system/multi-user.target.wants/gost-firstboot.service
+
+      - name: Headless rescue, Wi-Fi regdom, SPI enable
+        run: |
+          # boot/ssh: headless rescue access.
+          sudo touch boot/ssh
+          # Without a country set, rfkill blocks Wi-Fi until 'raspi-config'
+          # or a wpa_supplicant country= is set manually -- set it in the
+          # kernel cmdline instead so Wi-Fi works out of the box.
+          sudo sed -i 's/$/ cfg80211.ieee80211_regdom=US/' boot/cmdline.txt
+          if ! grep -q '^dtparam=spi=on' boot/config.txt; then
+            echo 'dtparam=spi=on' | sudo tee -a boot/config.txt >/dev/null
+          fi
+
+      - name: Unmount
+        if: always()
+        run: |
+          sudo umount boot root 2>/dev/null || true
+          sudo losetup -d "${{ steps.mount.outputs.loopdev }}" 2>/dev/null || true
+
+      - name: Compress image
+        run: |
+          # img is root-owned from the loop-mount steps above; xz needs sudo
+          # here or it fails with "Cannot set the file group".
+          sudo xz -T0 -2 rpios.img
+          mv rpios.img.xz gost-perimetr-os.img.xz
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gost-perimetr-os
+          path: gost-perimetr-os.img.xz
+          retention-days: 90

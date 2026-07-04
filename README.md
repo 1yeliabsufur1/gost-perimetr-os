@@ -1,0 +1,214 @@
+# GOST/PERIMETR OS
+
+A retro Soviet-terminal / amber-CRT car head-unit for the Raspberry Pi 5: drive
+telemetry over OBD2, a broadcast-simulation TV with a programmable guide,
+music/podcasts, offline maps, and a kiosk UI driven by a 5-way pad or
+keyboard. Runs fully offline after a one-time first-boot install.
+
+## Hardware
+
+- **Raspberry Pi 5 (8GB recommended)**
+- **Official 27W USB-C power supply.** This is not optional. Multi-port "GaN
+  120W" chargers negotiate only 5V/3A on the Pi 5's port, and under load that
+  weak 5V rail causes EXT4 I/O errors and, on USB-booted setups, bootloader
+  refusal. If you're booting from a USB SSD instead of a microSD card, the
+  27W supply matters even more — microSD is immune to the USB current
+  budget, USB-attached storage is not.
+- microSD card (32GB+) or USB SSD
+- OBDLink EX or any ELM327-compatible USB OBD2 adapter (`/dev/ttyUSB*`)
+- Optional: 5-way button pad (GPIO), MCP3008 + potentiometers for
+  volume/brightness (SPI), NMEA GPS module (serial), Pi Camera for dashcam
+- A small display + a way to drive it in kiosk mode (car head-unit screen,
+  HDMI panel, etc.)
+
+## Flashing
+
+1. Grab `gost-perimetr-os.img.xz` from this repo's `build-image` GitHub
+   Actions workflow (Actions tab → latest run → Artifacts).
+2. Open **Raspberry Pi Imager** → *Choose Device* → Raspberry Pi 5 →
+   *Choose OS* → scroll to **Use custom** → pick the `.img.xz` (no need to
+   unpack it, Imager reads xz directly) → *Choose Storage* → **Write**.
+3. When Imager asks "Would you like to apply OS customisation settings?"
+   answer **No / don't apply**. Trixie configures itself via cloud-init on
+   first boot; setting a username/password/Wi-Fi through Imager's dialog can
+   race that provisioning and land you on a broken sudo prompt at first
+   login. That's upstream cloud-init behavior — the image is fully
+   self-configuring through `gost-firstboot.service`, so customization is
+   never needed anyway. Pick device, pick the image, write — that's it.
+4. Boot the Pi with Ethernet connected for a fully hands-off first boot. For
+   Wi-Fi-only first boot, you'll need one manual step — see below.
+
+## First boot
+
+On first boot, `gost-firstboot.service` runs `install.sh` once: it installs
+apt packages, builds the Python venv, enables the systemd services, lays
+down the media folder skeleton, marks itself installed, disables itself, and
+reboots. From then on the Pi boots straight into the kiosk. This first pass
+needs internet access exactly once (dependencies come from apt/pip).
+
+- **Ethernet:** fully hands-off, no action needed.
+- **Wi-Fi only:** SSH in during the first boot window (or attach a keyboard)
+  and run:
+  ```
+  sudo nmcli dev wifi connect "<SSID>" password "<PASSWORD>"
+  ```
+  then let `install.sh` continue (it's watching for `network-online.target`
+  either way).
+
+After the reboot that ends `install.sh`, you land in the GOST/PERIMETR OS
+first-run setup wizard: create an operator password (this becomes your
+system/SSH password), then choose whether to connect to the internet now.
+Every boot after that goes straight to the boot animation and HOME.
+
+## Getting media onto the unit
+
+SSH in (headless rescue is always available — `boot/ssh` ships enabled) and
+drop files under `/opt/gost/media/`:
+
+```
+/opt/gost/media/TV/03 NEWS/*.mp4        # channel 3, named "NEWS"
+/opt/gost/media/TV/07 CARTOONS/*.mp4    # channel 7
+/opt/gost/media/TV/COMMERCIALS/*.mp4    # gap-filler spots, shown as channel 00 in GUIDE
+/opt/gost/media/MUSIC/ROCK/*.mp3        # music, grouped by genre for quick browsing
+/opt/gost/media/PODCASTS/NEWS/*.mp3     # podcasts are a separate pool from music, same genre convention
+```
+
+Channel folders must be named `NN NAME` with `NN` between 03 and 82. Music
+and podcasts are grouped by genre using the first folder level under
+`MUSIC/`/`PODCASTS/` (files dropped directly in the pool root show up under
+"UNSORTED"). A USB stick with a `TV/`, `MUSIC/`, or `PODCASTS/` folder at its
+root is auto-merged within a few seconds of being plugged in — no folder
+naming required on the stick itself beyond that.
+
+Offline maps: copy a `.pmtiles` file into `/opt/gost/maps/`. Free region
+extracts are available at protomaps.com/downloads and use the same layer
+schema (earth/water/landuse/buildings/roads/boundaries) NAV expects, so they
+render correctly out of the box. Without a map file, NAV shows a graceful
+fallback panel instead of a blank map.
+
+**Turn-by-turn routing** runs entirely offline: click the map (or, on the
+5-way pad, press SET DESTINATION, pan to your target, and press Enter to
+confirm) and GOST builds a routable graph directly from the road geometry in
+the currently loaded map tiles, then finds the shortest route by travel time
+and shows a turn list plus a live "next turn" banner that advances as your
+GPS fix moves. Two honest limitations worth knowing: it only routes through
+road data in tiles that are actually loaded (pan/zoom so both ends of your
+trip are visible before setting a destination), and it has no live traffic
+and doesn't enforce one-way streets (the Protomaps basemap schema doesn't
+reliably carry that information) — treat it as a solid offline routing MVP,
+not a replacement for a full commercial routing engine.
+
+## Controls
+
+5-way pad (GPIO) and keyboard arrows/Enter behave identically:
+
+| Action | Effect |
+|---|---|
+| Up / Down | Move focus within the current tab |
+| Left / Right | Switch tabs |
+| Enter | Activate the focused item |
+| Hold Left 5s (or Escape) | Universal back — closes any overlay browser, exits TV, kills launched apps |
+| (while watching TV) Up / Down | Step channel |
+| (while watching TV) Enter | Pause/resume |
+
+Text fields always take priority: while an input/textarea is focused, none
+of the above hotkeys fire — typing (including Backspace) goes straight to
+the field. PageUp/PageDown are direct channel up/down while watching TV —
+IR remotes on USB receivers show up as keyboards, so most of them work out
+of the box.
+
+### 5-way pad wiring (GPIO)
+
+Buttons are **active-low**: each button connects its GPIO pin to ground
+(internal pull-ups are enabled in software — no external resistors needed).
+All five signals sit on consecutive odd physical pins along one edge of the
+40-pin header, so a single-row connector covers the whole pad:
+
+| Button | BCM GPIO | Physical pin |
+|---|---|---|
+| Up | GPIO 5 | 29 |
+| Down | GPIO 6 | 31 |
+| Left (hold 5s = back) | GPIO 13 | 33 |
+| Right | GPIO 19 | 35 |
+| Enter | GPIO 26 | 37 |
+| Ground (shared) | — | 30, 34, or 39 |
+
+If your PCB routes different pins, no code change needed — add a
+`"gpio_pins": {"up": 5, "down": 6, "left": 13, "right": 19, "enter": 26}`
+override to `/opt/gost/state/config.json` and restart `hud-backend`.
+
+## Guide rules (the TV engine)
+
+- Durations are always real — probed with `ffprobe` on-device (cached by
+  path + mtime) and via in-browser video metadata probing in standalone/demo
+  mode. Nothing is ever assumed to be 30 minutes.
+- Overlap is impossible: the GUIDE picker greys out start slots that would
+  collide with an existing block, and the backend re-sanitizes the whole
+  schedule on every save as a second line of defense.
+- Tuning into a block mid-way starts playback at the correct wall-clock
+  offset (a 5:00–5:30 block tuned at 5:12 starts 12 minutes in). Unscheduled
+  channels run a continuous pseudo-broadcast rotation seeded by epoch time,
+  so different units (or a unit re-tuned later) join mid-stream consistently.
+- Gaps between scheduled blocks play a random commercial, hard-cut so it
+  never overruns into the next show. No commercials on hand → animated
+  static instead. An entirely empty channel is simply off-air (static).
+- TV itself is watch-only; all file management and scheduling happens in
+  GUIDE.
+
+## Vehicle telemetry / OBD-II
+
+Plug any ELM327-compatible USB adapter (OBDLink EX recommended) into the Pi
+— it shows up as `/dev/ttyUSB0` and the backend picks it up automatically,
+no pairing step. You get live SPEED/RPM/boost/temps/12V at 5Hz, fuel or
+hybrid-battery level, and a **stored trouble-code (DTC) sweep every 30
+seconds** — codes appear in the HUD tab's DTC panel with first-seen
+timestamps. Vehicle type (gas / hybrid / EV) is auto-detected from which
+PIDs answer, and the DRIVE/HUD labels adapt accordingly. If no adapter is
+present the DRIVE tab shows NOT CONNECTED and everything else works
+normally.
+
+## Showcase mode
+
+There is no separate "demo build" — the flashed unit always runs the real
+OS. Settings → SOURCE → **SHOWCASE** switches the telemetry source to a
+simulated drive (moving speed/SOC, a sample stored DTC, periodic 12V sag)
+so you can show the interface off indoors; switch back to AUTO and it goes
+right back to waiting for the real OBD-II adapter.
+
+## Testing in a VM (VirtualBox etc.)
+
+There's no separate x86 `.iso` — the OS *is* Raspberry Pi OS plus this
+repo's installer, and a bootable PC ISO would be a different distribution
+entirely. Two good ways to test without a Pi:
+
+1. **Frontend only (zero setup):** open `app/index.html` in any browser.
+   You get the full UI in preview mode with simulated telemetry.
+2. **Full stack:** install stock Debian 13 (trixie) amd64 in VirtualBox,
+   then `git clone` this repo and run `sudo ./install.sh`. Everything works
+   except GPIO/OBD/camera hardware (the installer skips the Pi-only lgpio
+   package automatically on non-Pi systems). The kiosk boots into the same
+   cage + Chromium shell.
+
+## Emulation (optional add-on)
+
+Retro console emulation is **not** part of the base image — it's kept as a
+documented, opt-in add-on so the base flash stays small and boots fast. If
+you want it, install a RetroArch/EmulationStation stack yourself after first
+boot; it isn't wired into the kiosk shell here.
+
+## Pi Zero 2 W
+
+Under evaluation, not supported yet. Chromium in kiosk mode is too heavy for
+512MB of RAM — it either OOMs or is unusably slow. Stick to the Pi 5 (or at
+minimum a Pi 4B with 4GB+) until that's revisited.
+
+## Repo layout
+
+```
+app/          Frontend: single self-contained app/index.html + vendored MapLibre/PMTiles
+backend/      hud_server.py -- the entire backend, single asyncio file
+system/       systemd units, kiosk-start.sh, gost-setpass, sudoers fragment
+media/        Empty TV/MUSIC skeleton shipped in the image
+install.sh    Idempotent first-boot installer
+.github/workflows/build-image.yml   Builds a flashable image via GitHub Actions
+```

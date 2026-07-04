@@ -1,0 +1,23 @@
+[Unit]
+Description=GOST/PERIMETR OS backend (telemetry, TV/guide engine, kiosk control)
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=__GOST_USER__
+Group=__GOST_USER__
+SupplementaryGroups=dialout gpio spi i2c video render
+WorkingDirectory=/opt/gost
+Environment=GOST_APP=/opt/gost/app
+Environment=GOST_MEDIA=/opt/gost/media
+Environment=GOST_MAPS=/opt/gost/maps
+Environment=GOST_STATE=/opt/gost/state
+ExecStart=/opt/gost/venv/bin/python3 /opt/gost/backend/hud_server.py
+Restart=always
+RestartSec=2
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,2137 @@
+<!doctype html>
+<html lang="en" data-theme="gost">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>GOST/PERIMETR OS</title>
+<link rel="stylesheet" href="vendor/maplibre-gl.css">
+<style>
+/* ============================== THEMES ============================== */
+:root, [data-theme="gost"]     { --pri:#ffb000; --dim:#7a5200; --bg:#0d0904; --warn:#ff3b30; --glow:#ffb000; --line:#8a5a00; }
+[data-theme="perimetr"]        { --pri:#ff3b30; --dim:#701010; --bg:#0a0505; --warn:#ffcc00; --glow:#ff3b30; --line:#8f2020; }
+[data-theme="fosfor"]          { --pri:#33ff66; --dim:#0e5a24; --bg:#040a05; --warn:#ff5533; --glow:#33ff66; --line:#1f8f45; }
+[data-theme="argon"]           { --pri:#38e0ff; --dim:#0d5a6e; --bg:#04090a; --warn:#ff5533; --glow:#38e0ff; --line:#1f7f90; }
+[data-theme="kremlin"]         { --pri:#eaeaea; --dim:#6a6a6a; --bg:#0a0a0a; --warn:#ff3b30; --glow:#eaeaea; --line:#5a5a5a; }
+[data-theme="okhra"]           { --pri:#ffd23d; --dim:#8a6a10; --bg:#0a0704; --warn:#ff3b30; --glow:#ffd23d; --line:#8a6a10; }
+
+/* ============================== BASE ============================== */
+* { box-sizing: border-box; }
+html, body { height:100%; margin:0; padding:0; }
+body {
+  background: var(--bg);
+  color: var(--pri);
+  font-family: "Courier New", ui-monospace, "Cascadia Mono", monospace;
+  font-size: 15px;
+  letter-spacing: 0.5px;
+  overflow: hidden;
+  user-select: none;
+}
+button, input, select {
+  font-family: inherit; font-size: inherit; color: var(--pri); background: var(--bg);
+  border: 1px solid var(--line); padding: 6px 10px;
+}
+button { cursor: pointer; }
+button:hover { background: var(--dim); }
+a { color: var(--pri); }
+.hidden { display: none !important; }
+.glow { text-shadow: 0 0 4px var(--glow), 0 0 14px var(--glow); }
+.dim { color: var(--dim); }
+
+/* CRT scanline + vignette overlay */
+#crt-overlay {
+  position: fixed; inset: 0; pointer-events: none; z-index: 9999;
+  background:
+    repeating-linear-gradient(to bottom, rgba(0,0,0,0.28) 0, rgba(0,0,0,0.28) 1px, transparent 1px, transparent 3px),
+    radial-gradient(ellipse at center, rgba(0,0,0,0) 55%, rgba(0,0,0,0.55) 100%);
+  mix-blend-mode: multiply;
+}
+
+@keyframes blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0.12; } }
+@keyframes cursorblink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+.alarm { background: var(--warn) !important; color: var(--bg) !important; animation: blink 0.6s steps(1) infinite; }
+.cursor { display:inline-block; width:0.6em; background:var(--pri); animation: cursorblink 0.8s steps(1) infinite; }
+
+/* Frame panel w/ box-drawing title */
+.frame {
+  border: 1px solid var(--line); position: relative; padding: 16px 12px 12px;
+  margin: 10px 0;
+}
+.frame::before {
+  content: "\2500\2500 " attr(data-title) " ";
+  position: absolute; top: -10px; left: 10px; background: var(--bg);
+  padding: 0 6px; color: var(--pri); font-size: 12px; letter-spacing: 2px;
+}
+
+[data-focus] { outline: none; }
+[data-focus]:focus { outline: 2px solid var(--pri); box-shadow: 0 0 10px var(--glow); background: var(--dim); }
+
+/* ============================== SCREENS ============================== */
+.screen { position: fixed; inset: 0; display: flex; flex-direction: column; }
+
+/* ---- Wizard ---- */
+#wizard { justify-content: center; align-items: center; padding: 40px; }
+#wizard .term { width: min(720px, 92vw); }
+#wizard .line { margin: 6px 0; white-space: pre-wrap; }
+#wizard input[type="password"] { width: 260px; }
+#wizard .choice-btn { display:block; width: 260px; margin: 4px 0; text-align:left; }
+
+/* ---- Boot ---- */
+#boot { justify-content: center; align-items: flex-start; padding: 60px; }
+#boot .line { margin: 4px 0; }
+#boot .ok { color: var(--pri); float: right; }
+
+/* ---- Shell ---- */
+#shell { }
+#statusbar {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 8px 16px; border-bottom: 1px solid var(--line); font-size: 13px;
+}
+#statusbar .dot { display:inline-block; width:8px; height:8px; border-radius:50%; background: var(--dim); margin-right:6px; }
+#statusbar .dot.on { background: var(--pri); box-shadow: 0 0 6px var(--glow); }
+#content { flex: 1; overflow: auto; padding: 14px 20px; position: relative; }
+.tab { display: none; height: 100%; }
+.tab.active { display: block; }
+#tabbar { display: flex; border-top: 1px solid var(--line); }
+#tabbar button {
+  flex: 1; border: none; border-right: 1px solid var(--line); background: var(--bg);
+  padding: 10px 4px; font-size: 13px;
+}
+#tabbar button:last-child { border-right: none; }
+#tabbar button.active { background: var(--dim); color: var(--pri); }
+
+/* ---- HOME ---- */
+.home-item { display:block; width:100%; text-align:left; margin: 6px 0; padding: 10px; }
+.home-item .desc { display:block; font-size: 12px; color: var(--dim); margin-top: 2px; }
+
+/* ---- DRIVE ---- */
+#drive-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+.stat-box { border: 1px solid var(--line); padding: 10px; }
+.stat-box .label { font-size: 11px; color: var(--dim); }
+.stat-box .value { font-size: 28px; }
+#drive-notconnected {
+  position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+  background: rgba(0,0,0,0.75); font-size: 22px; letter-spacing:3px;
+}
+.pbar { height: 18px; border: 1px solid var(--line); position: relative; }
+.pbar .fill { position:absolute; left:50%; top:0; bottom:0; background: var(--pri); }
+
+/* ---- HUD ---- */
+#hud-speed-wrap { position: relative; height: 160px; text-align: center; margin-bottom: 10px; }
+#hud-speed-wrap .ghost { position:absolute; inset:0; font-size: 110px; font-weight:bold; line-height:160px; }
+#hud-gauges { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.gauge .label { font-size: 11px; color: var(--dim); }
+.gauge .bar { font-size: 18px; letter-spacing: -1px; }
+.gauge .num { font-size: 20px; }
+#hud-status-line { margin-top: 10px; font-size: 13px; border-top: 1px solid var(--line); padding-top: 6px; }
+#dtc-panel .dtc-row { display:flex; justify-content:space-between; border-bottom: 1px dashed var(--line); padding: 4px 0; font-size: 13px; }
+
+/* ---- TV ---- */
+/* min-height:0 + overflow:hidden on the flex chain is required so the
+   channel list scrolls INSIDE its own column instead of growing the whole
+   row taller (flex items default to min-height:auto, which ignores
+   overflow-y:auto on a descendant unless something in the chain clips). */
+#tv-layout { display:flex; gap: 16px; height: 100%; min-height: 0; }
+#tv-channels-wrap { display:flex; flex-direction:column; min-height: 0; overflow:hidden; }
+#tv-channels { width: 220px; flex: 1; overflow-y:auto; min-height: 0; }
+.tv-chan-row { display:block; width:100%; text-align:left; margin: 2px 0; }
+#tv-screen { flex:1; position:relative; background:#000; border:1px solid var(--line); display:flex; align-items:center; justify-content:center; overflow:hidden; }
+#tv-video { width:100%; height:100%; object-fit:contain; background:#000; }
+#tv-static-canvas { width:100%; height:100%; }
+#tv-overlay-text { position:absolute; bottom:8px; left:8px; font-size:12px; background:rgba(0,0,0,0.6); padding:2px 8px; }
+#tv-osd { position:absolute; top:20px; right:32px; text-align:right; opacity:0; transition:opacity 0.3s; pointer-events:none; }
+#tv-osd.show { opacity:1; }
+#tv-osd .osd-num { font-size:64px; font-weight:bold; }
+#tv-osd .osd-name { font-size:13px; letter-spacing:3px; color:var(--dim); margin-top:-6px; }
+
+/* ---- GUIDE ---- */
+#guide-layout { display:flex; gap:16px; height:100%; min-height: 0; }
+#guide-channels-wrap { display:flex; flex-direction:column; min-height: 0; overflow:hidden; }
+#guide-channels { width:200px; flex: 1; overflow-y:auto; min-height: 0; }
+#guide-main-wrap { display:flex; flex-direction:column; min-height: 0; overflow:hidden; }
+#guide-main { flex:1; overflow-y:auto; min-height: 0; }
+.day-tabs button { margin-right:2px; }
+.day-tabs button.active { background: var(--dim); }
+#guide-grid { display:grid; grid-template-columns: repeat(12, 1fr); gap:2px; margin-top:10px; }
+.slot { border:1px solid var(--line); font-size:10px; padding:4px 2px; text-align:center; cursor:pointer; white-space:pre-line; overflow:hidden; }
+.slot.occupied { background: var(--dim); }
+.slot.blocked { opacity:0.25; cursor:not-allowed; }
+.file-row { display:flex; justify-content:space-between; padding:3px 0; border-bottom:1px dashed var(--line); font-size:13px; }
+
+/* ---- MUSIC ---- */
+#music-frame { height:100%; display:flex; flex-direction:column; }
+#music-pools { display:flex; gap:8px; margin-bottom:10px; flex-shrink:0; }
+#music-pools button.active { background: var(--dim); }
+#music-body { display:flex; gap:16px; flex:1; min-height:0; overflow:hidden; }
+#music-genres { width:170px; overflow-y:auto; flex-shrink:0; }
+#music-tracks { flex:1; overflow-y:auto; }
+.genre-chip { display:block; width:100%; text-align:left; margin:2px 0; }
+.genre-chip.active { background: var(--dim); }
+.music-row { display:flex; justify-content:space-between; align-items:center; gap:8px; padding:6px; border-bottom: 1px dashed var(--line); }
+#music-now-playing { border-top:1px solid var(--line); margin-top:10px; padding-top:12px; flex-shrink:0; }
+#music-now-playing:empty { display:none; }
+.np-kicker { font-size:11px; letter-spacing:3px; color:var(--dim); }
+.np-title { font-size:26px; font-weight:bold; margin: 2px 0; }
+.np-sub { font-size:13px; color:var(--dim); margin-bottom:10px; }
+.np-wave { display:flex; align-items:flex-end; gap:2px; height:40px; margin:10px 0; cursor:pointer; }
+.np-wave .bar { flex:1; background: var(--dim); cursor:pointer; }
+.np-wave .bar.lit { background: var(--pri); box-shadow: 0 0 4px var(--glow); }
+.np-progress { display:flex; justify-content:space-between; font-size:11px; color:var(--dim); margin-bottom:3px; }
+.np-bar-track { height:6px; background: var(--dim); position:relative; margin-bottom:14px; }
+.np-bar-fill { position:absolute; left:0; top:0; bottom:0; background: var(--pri); }
+.np-controls { display:flex; gap:16px; align-items:center; }
+.np-vol-row { display:flex; align-items:center; gap:8px; font-size:11px; color:var(--dim); flex:1; }
+.np-vol-row input[type=range] { flex:1; accent-color: var(--pri); }
+
+/* ---- NAV ---- */
+#nav-map { position:absolute; inset: 14px 20px; }
+#nav-fallback { padding: 20px; }
+#nav-radar { display:block; margin: 20px auto; }
+#nav-crosshair {
+  position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); z-index:7;
+  font-size:32px; color:var(--pri); text-shadow:0 0 8px var(--glow); pointer-events:none;
+}
+#nav-hud { position:absolute; top:20px; left:20px; z-index:6; display:flex; flex-direction:column; gap:6px; align-items:flex-start; }
+#nav-turn-banner {
+  background: rgba(0,0,0,0.75); border:1px solid var(--line); padding:8px 12px; font-size:14px;
+  color:var(--pri); max-width:340px;
+}
+#nav-mode-badge {
+  background: rgba(0,0,0,0.75); border:1px solid var(--pri); padding:6px 10px; font-size:11px;
+  letter-spacing:1px; color:var(--pri); max-width:340px;
+}
+#nav-route-list {
+  position:absolute; bottom:20px; left:20px; right:20px; z-index:6; max-height:34vh; overflow-y:auto;
+  background: rgba(0,0,0,0.75); border:1px solid var(--line); padding:8px 12px; font-size:12px;
+}
+
+/* ---- SETTINGS ---- */
+.theme-swatch { display:inline-block; width:26px; height:26px; border:2px solid var(--line); margin-right:8px; cursor:pointer; vertical-align:middle; }
+.settings-row { margin: 12px 0; }
+
+/* ---- Overlay browser ---- */
+#overlay { position: fixed; inset: 0; z-index: 500; display:flex; flex-direction:column; background: var(--bg); }
+#overlay-titlebar { padding:8px 12px; border-bottom:1px solid var(--line); font-size:13px; display:flex; justify-content:space-between; }
+#overlay-frame { flex:1; border:none; background:#fff; }
+
+/* ---- Modal (Wi-Fi, etc.) ---- */
+#modal { position: fixed; inset: 0; z-index: 600; display:flex; align-items:center; justify-content:center; background: rgba(0,0,0,0.75); }
+#modal .frame { background: var(--bg); width: min(520px, 90vw); max-height: 80vh; overflow:auto; margin:0; }
+#modal-body input[type="text"], #modal-body input[type="password"] { display:block; width: 100%; margin: 4px 0 10px; }
+</style>
+</head>
+<body>
+<div id="crt-overlay"></div>
+<div id="app">
+
+  <!-- ======================= SETUP WIZARD ======================= -->
+  <div id="wizard" class="screen hidden">
+    <div class="term">
+      <div id="wizard-body"></div>
+    </div>
+  </div>
+
+  <!-- ======================= BOOT ANIMATION ======================= -->
+  <div id="boot" class="screen hidden">
+    <div id="boot-body"></div>
+  </div>
+
+  <!-- ======================= MAIN SHELL ======================= -->
+  <div id="shell" class="screen hidden">
+    <header id="statusbar">
+      <div><span class="dot" id="conn-dot"></span><span id="conn-label">OFFLINE</span> // <span id="src-label">AUTO</span></div>
+      <div id="clock">00:00:00</div>
+    </header>
+
+    <main id="content">
+      <section id="tab-home" class="tab">
+        <div class="frame" data-title="GOST // PERIMETR OS v3">
+          <div id="home-list"></div>
+        </div>
+      </section>
+
+      <section id="tab-drive" class="tab">
+        <div class="frame" data-title="DRIVE" style="height:100%;">
+          <div id="drive-notconnected" class="hidden">*** NOT CONNECTED ***</div>
+          <div id="drive-grid"></div>
+        </div>
+      </section>
+
+      <section id="tab-hud" class="tab">
+        <div id="hud-speed-wrap"></div>
+        <div id="hud-gauges"></div>
+        <div id="hud-status-line"></div>
+        <div class="frame hidden" data-title="DTC" id="dtc-panel"></div>
+      </section>
+
+      <section id="tab-tv" class="tab">
+        <div id="tv-layout">
+          <div class="frame" data-title="CHANNELS" id="tv-channels-wrap" style="width:220px;">
+            <div id="tv-channels"></div>
+          </div>
+          <div id="tv-screen">
+            <video id="tv-video" class="hidden" playsinline></video>
+            <canvas id="tv-static-canvas" class="hidden" width="480" height="270"></canvas>
+            <div id="tv-idle" style="font-size:13px;color:var(--dim);">SELECT A CHANNEL</div>
+            <div id="tv-overlay-text"></div>
+            <div id="tv-osd" class="glow"><div class="osd-num"></div><div class="osd-name"></div></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-guide" class="tab">
+        <div id="guide-layout">
+          <div class="frame" data-title="CHANNELS" id="guide-channels-wrap" style="width:200px;">
+            <div id="guide-channels"></div>
+          </div>
+          <div class="frame" data-title="PROGRAMMER" id="guide-main-wrap" style="flex:1;">
+            <div id="guide-main"></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-music" class="tab">
+        <div class="frame" data-title="MUSIC / PODCASTS" id="music-frame">
+          <div id="music-pools">
+            <button data-focus id="music-pool-music-btn">MUSIC</button>
+            <button data-focus id="music-pool-podcast-btn">PODCASTS</button>
+            <button data-focus id="music-add-btn">[ + ADD ]</button>
+            <input type="file" id="music-file-input" accept="audio/*" multiple class="hidden">
+          </div>
+          <div id="music-body">
+            <div id="music-genres"></div>
+            <div id="music-tracks"></div>
+          </div>
+          <div id="music-now-playing"></div>
+        </div>
+      </section>
+
+      <section id="tab-nav" class="tab">
+        <div id="nav-map" class="hidden"></div>
+        <div id="nav-crosshair" class="hidden">+</div>
+        <div id="nav-hud" class="hidden">
+          <button data-focus id="nav-map-mode-btn">[ MAP MODE ]</button>
+          <button data-focus id="nav-set-dest-btn">[ SET DESTINATION ]</button>
+          <button data-focus id="nav-clear-route-btn" class="hidden">[ CLEAR ROUTE ]</button>
+          <div id="nav-mode-badge" class="hidden">MAP MODE -- PAD PANS, ENTER ZOOMS IN, HOLD &lt;- 5s EXITS</div>
+          <div id="nav-turn-banner" class="hidden"></div>
+        </div>
+        <div id="nav-route-list" class="hidden"></div>
+        <div id="nav-fallback" class="frame" data-title="NAV">
+          <div id="nav-fallback-msg">SCANNING FOR OFFLINE MAP DATA...</div>
+          <canvas id="nav-radar" width="220" height="220"></canvas>
+          <div id="nav-coords" class="dim"></div>
+        </div>
+      </section>
+
+      <section id="tab-settings" class="tab">
+        <div class="frame" data-title="SOURCE">
+          <div class="settings-row">
+            <button data-focus id="src-auto-btn">AUTO (OBD2)</button>
+            <button data-focus id="src-demo-btn">SHOWCASE</button>
+          </div>
+        </div>
+        <div class="frame" data-title="THEME">
+          <div class="settings-row" id="theme-swatches"></div>
+        </div>
+        <div class="frame" data-title="WI-FI">
+          <div class="settings-row">
+            <button data-focus id="wifi-scan-btn">[ ADD / MANAGE WI-FI ]</button>
+          </div>
+        </div>
+        <div class="frame" data-title="SYSTEM CLOCK">
+          <div class="settings-row" id="clock-current"></div>
+          <div class="settings-row">
+            <input type="datetime-local" data-focus id="clock-set-input">
+            <button data-focus id="clock-set-btn">[ SET ]</button>
+            <span id="clock-set-result" class="dim"></span>
+          </div>
+        </div>
+        <div class="frame" data-title="DASHCAM">
+          <div class="settings-row">
+            <button data-focus id="dashcam-toggle-btn">OFF</button>
+          </div>
+        </div>
+        <div class="frame" data-title="UPDATES">
+          <div class="settings-row">
+            <button data-focus id="update-check-btn">[ CHECK FOR UPDATES ]</button>
+            <span id="update-result" class="dim"></span>
+          </div>
+        </div>
+        <div class="frame" data-title="ABOUT">
+          <div id="about-body" class="dim"></div>
+        </div>
+      </section>
+    </main>
+
+    <nav id="tabbar"></nav>
+  </div>
+
+  <!-- ======================= MODAL (Wi-Fi, etc.) ======================= -->
+  <div id="modal" class="hidden">
+    <div class="frame" id="modal-frame" data-title="">
+      <div id="modal-body"></div>
+    </div>
+  </div>
+
+  <!-- ======================= OVERLAY BROWSER ======================= -->
+  <div id="overlay" class="hidden">
+    <div id="overlay-titlebar">
+      <span>GOST // EXTERNAL <span id="overlay-url"></span></span>
+      <button id="overlay-close-btn">[ CLOSE ]</button>
+    </div>
+    <iframe id="overlay-frame"></iframe>
+  </div>
+
+  <audio id="global-audio"></audio>
+</div>
+
+<script src="vendor/pmtiles.js"></script>
+<script src="vendor/maplibre-gl.js"></script>
+<script>
+"use strict";
+/* ===========================================================================
+ * GOST/PERIMETR OS -- frontend shell
+ * Runs standalone (demo mode, localStorage) or against backend/hud_server.py
+ * over ws://127.0.0.1:8765 + http://127.0.0.1:8766.
+ * =========================================================================== */
+
+const TABS = ["home","drive","hud","tv","guide","music","nav","settings"];
+const TAB_LABELS = {
+  home:"HOME", drive:"DRIVE", hud:"HUD", tv:"TV", guide:"GUIDE",
+  music:"MUSIC", nav:"NAV", settings:"SETTINGS",
+};
+const THEMES = [
+  {id:"gost", name:"GOST AMBER"}, {id:"perimetr", name:"PERIMETR RED"},
+  {id:"fosfor", name:"FOSFOR GREEN"}, {id:"argon", name:"ARGON CYAN"},
+  {id:"kremlin", name:"KREMLIN WHITE"}, {id:"okhra", name:"OKHRA YELLOW"},
+];
+const WEEKDAYS = ["sun","mon","tue","wed","thu","fri","sat"];
+
+/* ------------------------------- storage -------------------------------- */
+const LS = {
+  get(key, fallback) {
+    try { const v = localStorage.getItem("gost." + key); return v == null ? fallback : JSON.parse(v); }
+    catch (e) { return fallback; }
+  },
+  set(key, value) {
+    try { localStorage.setItem("gost." + key, JSON.stringify(value)); } catch (e) { /* quota etc, ignore */ }
+  },
+};
+
+/* ------------------------------- config ---------------------------------- */
+const Config = {
+  data: Object.assign({
+    setup_done: false, source_mode: "AUTO", theme: "gost", guide3: {}, dashcam: false,
+  }, LS.get("config", {})),
+  save() { LS.set("config", this.data); },
+  set(key, value, fromRemote) {
+    this.data[key] = value;
+    this.save();
+    if (!fromRemote && Net.connected) Net.send({ type: "config.set", key, value });
+    if (key === "theme") applyTheme(value);
+  },
+};
+
+function applyTheme(id) {
+  document.documentElement.setAttribute("data-theme", id);
+}
+
+/* -------------------------------- utils ----------------------------------- */
+function $(sel, root) { return (root || document).querySelector(sel); }
+function $all(sel, root) { return Array.from((root || document).querySelectorAll(sel)); }
+function el(tag, attrs, children) {
+  const e = document.createElement(tag);
+  for (const k in (attrs || {})) {
+    if (k === "text") e.textContent = attrs[k];
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), attrs[k]);
+    else e.setAttribute(k, attrs[k]);
+  }
+  for (const c of (children || [])) e.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+  return e;
+}
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+function pad2(n) { return String(n).padStart(2, "0"); }
+function blockBar(value, min, max, width) {
+  width = width || 20;
+  if (value == null || isNaN(value)) return "░".repeat(width);
+  const frac = clamp((value - min) / (max - min), 0, 1);
+  const filled = Math.round(frac * width);
+  return "▮".repeat(filled) + "░".repeat(width - filled);
+}
+function fmt1(v) { return v == null || isNaN(v) ? "--" : v.toFixed(1); }
+function fmt0(v) { return v == null || isNaN(v) ? "--" : Math.round(v).toString(); }
+
+/* ============================================================================
+ * TV / GUIDE ENGINE -- pure functions, mirrors backend/hud_server.py exactly
+ * (resolve_channel / sanitize_guide3 / pick_commercial) so standalone demo
+ * mode and on-device playback never disagree about what should be airing.
+ * ========================================================================== */
+function sanitizeGuide3(guide3) {
+  const clean = {};
+  if (!guide3 || typeof guide3 !== "object") return clean;
+  for (const chan of Object.keys(guide3)) {
+    clean[chan] = {};
+    const days = guide3[chan] || {};
+    for (const day of WEEKDAYS) {
+      let blocks = Array.isArray(days[day]) ? days[day].slice() : [];
+      blocks = blocks.filter(b => b && typeof b.s === "number" && typeof b.d === "number" &&
+        b.d > 0 && b.s >= 0 && b.s + b.d <= 24 * 60);
+      blocks.sort((a, b) => a.s - b.s);
+      const kept = [];
+      let cursor = -1;
+      for (const b of blocks) {
+        if (b.s < cursor) continue;
+        kept.push({ s: b.s, d: b.d, f: b.f });
+        cursor = b.s + b.d;
+      }
+      clean[chan][day] = kept;
+    }
+  }
+  return clean;
+}
+
+function pickCommercial(commercials, nowSec) {
+  if (!commercials || !commercials.length) return null;
+  return commercials[Math.floor(nowSec / 30) % commercials.length];
+}
+
+function resolveChannel(chan, channels, commercials, guide3, nowMs) {
+  const now = nowMs != null ? nowMs : Date.now();
+  const dt = new Date(now);
+  const weekday = WEEKDAYS[dt.getDay()];
+  const minuteOfDay = dt.getHours() * 60 + dt.getMinutes();
+  const secOfMinute = dt.getSeconds();
+  const ch = channels[chan];
+  const schedule = ((guide3[chan] || {})[weekday]) || [];
+
+  if (schedule.length) {
+    for (const b of schedule) {
+      if (b.s <= minuteOfDay && minuteOfDay < b.s + b.d) {
+        const offset = (minuteOfDay - b.s) * 60 + secOfMinute;
+        const file = ch && ch.files.find(f => f.name === b.f);
+        if (file) return { kind: "show", file, offset, remaining: b.d * 60 - offset };
+        return { kind: "static", reason: "missing_file" };
+      }
+    }
+    const upcoming = schedule.filter(b => b.s > minuteOfDay).map(b => b.s);
+    const gapEnd = upcoming.length ? Math.min.apply(null, upcoming) : 24 * 60;
+    const gapSecs = Math.max(1, (gapEnd - minuteOfDay) * 60 - secOfMinute);
+    const spot = pickCommercial(commercials, Math.floor(now / 1000));
+    if (spot) {
+      const dur = spot.duration || 30;
+      return { kind: "commercial", file: spot, offset: 0, length: Math.min(dur, gapSecs) };
+    }
+    return { kind: "static", reason: "gap_no_commercials" };
+  }
+
+  if (ch && ch.files && ch.files.length) {
+    const files = ch.files;
+    const durations = files.map(f => f.duration || 300);
+    const total = durations.reduce((a, b) => a + b, 0);
+    if (total <= 0) return { kind: "static", reason: "no_duration" };
+    let seed = 0;
+    for (let i = 0; i < chan.length; i++) seed += chan.charCodeAt(i);
+    seed *= 997;
+    const pos = Math.floor(((now / 1000) + seed) % total);
+    let acc = 0;
+    for (let i = 0; i < files.length; i++) {
+      const d = durations[i];
+      if (pos < acc + d) return { kind: "show", file: files[i], offset: pos - acc, remaining: d - (pos - acc) };
+      acc += d;
+    }
+    return { kind: "static", reason: "rotation_fallthrough" };
+  }
+  return { kind: "static", reason: "off_air" };
+}
+
+/** Half-hour slot availability for a day's schedule, given a candidate file's
+ * duration in minutes. Returns bool[48]; slot greyed out if it would overlap
+ * an existing block or overrun past midnight. */
+function slotAvailability(daySchedule, fileDurationMin) {
+  const avail = new Array(48).fill(true);
+  for (let slot = 0; slot < 48; slot++) {
+    const start = slot * 30;
+    const end = start + fileDurationMin;
+    if (end > 24 * 60) { avail[slot] = false; continue; }
+    for (const b of daySchedule) {
+      if (start < b.s + b.d && b.s < end) { avail[slot] = false; break; }
+    }
+  }
+  return avail;
+}
+
+/* ============================================================================
+ * NETWORKING -- WebSocket to backend, or DEMO fallback when unreachable.
+ * ========================================================================== */
+const Net = {
+  ws: null, connected: false, telemetry: null, library: { channels: {}, music: [] },
+  tvStatus: null,
+  connect() {
+    try {
+      this.ws = new WebSocket("ws://127.0.0.1:8765");
+    } catch (e) { this.onFail(); return; }
+    this.ws.onopen = () => { this.connected = true; updateConnIndicator(); };
+    this.ws.onclose = () => { this.connected = false; updateConnIndicator(); this.onFail(); };
+    this.ws.onerror = () => { this.onFail(); };
+    this.ws.onmessage = (ev) => {
+      let msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
+      this.route(msg);
+    };
+    setTimeout(() => { if (!this.connected) this.onFail(); }, 1500);
+  },
+  onFail() {
+    if (this._failed) return;
+    this._failed = true;
+    Demo.start();
+  },
+  route(msg) {
+    if (msg.type === "telemetry") { this.telemetry = msg; renderDrive(msg); renderHud(msg); }
+    else if (msg.type === "library") {
+      this.library = msg;
+      renderTvChannelList(); renderGuideChannelList();
+      renderMusicGenres(); renderMusicTracks();
+    }
+    else if (msg.type === "config") { Object.assign(Config.data, msg); delete Config.data.type; onConfigSynced(); }
+    else if (msg.type === "tv.status") { this.tvStatus = msg; renderTvStatus(); }
+    else if (msg.type === "input") { handleAction(msg.key === "back_hold" ? "back_hold" : msg.key); }
+    else if (msg.type === "gps") { Nav.onFix(msg.lat, msg.lon); }
+    else if (msg.type === "wifi.scan") { Wifi.renderScanResults(msg.networks); }
+    else if (msg.type === "wifi.join") {
+      const status = $("#wifi-connect-status");
+      if (status) status.textContent = msg.ok ? "CONNECTED" : "CONNECTION FAILED -- CHECK PASSWORD";
+    }
+    else if (msg.type === "update.check") { $("#update-result").textContent = msg.ok ? "UP TO DATE" : "CHECK FAILED"; }
+    else if (msg.type === "clock.set") { $("#clock-set-result").textContent = msg.ok ? "CLOCK SET" : "FAILED -- CHECK DEVICE LOGS"; }
+    else if (msg.type === "system.info") { renderAbout(msg); }
+  },
+  send(obj) { if (this.connected && this.ws) { try { this.ws.send(JSON.stringify(obj)); } catch (e) {} } },
+};
+
+function updateConnIndicator() {
+  $("#conn-dot").classList.toggle("on", Net.connected);
+  $("#conn-label").textContent = Net.connected ? "ONLINE" : (Demo.running ? "PREVIEW" : "OFFLINE");
+}
+
+function onConfigSynced() {
+  applyTheme(Config.data.theme || "gost");
+  $("#src-label").textContent = srcModeLabel(Config.data.source_mode);
+}
+
+/* ============================================================================
+ * DEMO MODE -- full simulated telemetry + GPS + about info when no backend.
+ * This is both the dev environment and the GitHub Pages standalone demo.
+ * ========================================================================== */
+const Demo = {
+  running: false, t0: 0, dtcs: {},
+  start() {
+    if (this.running) return;
+    this.running = true;
+    this.t0 = Date.now();
+    updateConnIndicator();
+    renderAbout({ version: "3.0.0 (DEMO)", hostname: "browser", uptime_sec: null });
+    Nav.startDemoFix();
+    setInterval(() => this.tick(), 200);
+  },
+  tick() {
+    const t = (Date.now() - this.t0) / 1000;
+    const vtype = "ev";
+    const speedMph = 35 + 25 * Math.abs(((t / 20) % 2) - 1);
+    const soc = Math.max(5, 82 - (t / 60) * 0.8);
+    let batt12 = 12.6 + 0.3 * ((t / 13) % 1);
+    if (Math.floor(t / 45) % 6 === 5) batt12 = 11.8;
+    if (!this.dtcs.P1A42) this.dtcs.P1A42 = { first_seen: new Date().toISOString(), desc: "Hybrid battery cell imbalance (demo)" };
+    const msg = {
+      type: "telemetry", connected: true, source_mode: Config.data.source_mode, vtype,
+      values: {
+        SPEED: speedMph / 0.621371, RPM: 0, INTAKE_PRESSURE: 101.3, MAF: 0,
+        COOLANT_TEMP: 68 + 5 * ((t / 30) % 1), CONTROL_MODULE_VOLTAGE: batt12,
+        BAROMETRIC_PRESSURE: 101.3, HYBRID_BATTERY_REMAINING: soc,
+      },
+      derived: { mph: speedMph, boost_psi: 0, mpg: null, coolant_f: (68 + 5 * ((t / 30) % 1)) * 9 / 5 + 32, oil_f: null },
+      dtcs: this.dtcs,
+    };
+    Net.telemetry = msg;
+    renderDrive(msg); renderHud(msg);
+  },
+};
+
+/* ============================================================================
+ * FOCUS / INPUT -- keyboard + GPIO ("input" ws messages) share one dispatcher.
+ * CRITICAL: when a text INPUT/TEXTAREA has focus, stand down entirely.
+ * ========================================================================== */
+const TabHandlers = {};
+
+function focusables() {
+  const scope = (typeof Modal !== "undefined" && Modal.isOpen()) ? $("#modal-body")
+    : ($("#tab-" + State.tab) || $("#wizard-body") || document);
+  return $all("[data-focus]", scope).filter(e => e.offsetParent !== null && !e.disabled);
+}
+function moveFocus(delta) {
+  const list = focusables();
+  if (!list.length) return;
+  let idx = list.indexOf(document.activeElement);
+  idx = idx === -1 ? 0 : (idx + delta + list.length) % list.length;
+  list[idx].focus();
+}
+function switchTab(delta) {
+  let idx = TABS.indexOf(State.tab);
+  idx = (idx + delta + TABS.length) % TABS.length;
+  setTab(TABS[idx]);
+}
+function handleAction(action) {
+  if (action === "back_hold") { universalBack(); return; }
+  const handler = TabHandlers[State.tab];
+  if (handler && handler.onAction && handler.onAction(action)) return;
+  switch (action) {
+    case "up": moveFocus(-1); break;
+    case "down": moveFocus(1); break;
+    case "left": switchTab(-1); break;
+    case "right": switchTab(1); break;
+    case "enter": if (document.activeElement && document.activeElement.click) document.activeElement.click(); break;
+  }
+}
+
+function universalBack() {
+  if (Modal.isOpen()) { Modal.close(); return; }
+  if (Overlay.isOpen()) { Overlay.close(); return; }
+  if (TV.watching) { TV.exit(); return; }
+  if (Nav.destMode) { Nav.toggleDestMode(); return; }
+  if (Nav.mapMode) { Nav.toggleMapMode(); return; }
+  Net.send({ type: "back" });
+}
+
+/* ============================================================================
+ * MODAL -- generic focused overlay panel (Wi-Fi, etc.), reuses the .frame look.
+ * ========================================================================== */
+const Modal = {
+  open(title, buildFn) {
+    $("#modal-frame").setAttribute("data-title", title);
+    const body = $("#modal-body");
+    body.innerHTML = "";
+    buildFn(body);
+    $("#modal").classList.remove("hidden");
+    setTimeout(() => { const f = focusables()[0]; if (f) f.focus(); }, 0);
+  },
+  close() {
+    $("#modal").classList.add("hidden");
+    $("#modal-body").innerHTML = "";
+  },
+  isOpen() { return !$("#modal").classList.contains("hidden"); },
+};
+
+let holdTimer = null;
+document.addEventListener("keydown", (e) => {
+  const tag = document.activeElement && document.activeElement.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA") {
+    if (e.key === "Escape") document.activeElement.blur();
+    return; // never eat typing -- this is the Backspace-eating bug fix
+  }
+  if (e.key === "Escape") { universalBack(); return; }
+  if (e.key === "ArrowLeft") {
+    e.preventDefault();
+    if (!holdTimer) holdTimer = setTimeout(() => { holdTimer = null; universalBack(); }, 5000);
+    return;
+  }
+  const map = { ArrowUp: "up", ArrowDown: "down", ArrowRight: "right", Enter: "enter" };
+  if (map[e.key]) { e.preventDefault(); handleAction(map[e.key]); return; }
+  // IR remote USB receivers present as a keyboard; PageUp/PageDown act as a
+  // direct hardware channel-changer, independent of which tab has focus.
+  if (e.key === "PageUp") { e.preventDefault(); if (TV.watching) TV.step(1); }
+  else if (e.key === "PageDown") { e.preventDefault(); if (TV.watching) TV.step(-1); }
+});
+document.addEventListener("keyup", (e) => {
+  if (e.key === "ArrowLeft" && holdTimer) { clearTimeout(holdTimer); holdTimer = null; handleAction("left"); }
+});
+
+/* ============================================================================
+ * WINDOW.OPEN OVERRIDE -- nothing ever leaves the shell.
+ * ========================================================================== */
+const Overlay = {
+  open(url) {
+    $("#overlay-url").textContent = url;
+    $("#overlay-frame").src = url;
+    $("#overlay").classList.remove("hidden");
+  },
+  close() {
+    $("#overlay").classList.add("hidden");
+    $("#overlay-frame").src = "about:blank";
+  },
+  isOpen() { return !$("#overlay").classList.contains("hidden"); },
+};
+window.open = function (url) {
+  if (Net.connected) Net.send({ type: "app.launch", url });
+  else Overlay.open(url);
+  return null;
+};
+$("#overlay-close-btn") && $("#overlay-close-btn").addEventListener("click", () => Overlay.close());
+
+/* ============================================================================
+ * SETUP WIZARD
+ * ========================================================================== */
+const Wizard = {
+  step: 0, username: "", pw1: "", wifiPending: false,
+  start() { this.step = 1; this.render(); },
+  render() {
+    const body = $("#wizard-body");
+    body.innerHTML = "";
+    if (this.step === 1) {
+      body.appendChild(el("div", { class: "line glow" }, ["GOST/PERIMETR OS -- FIRST BOOT SETUP"]));
+      body.appendChild(el("div", { class: "line" }, ["OPERATOR NAME"]));
+      const uname = el("input", { type: "text", "data-focus": "", id: "wiz-uname", autocomplete: "off" });
+      body.appendChild(el("div", { class: "line" }, [uname]));
+      body.appendChild(el("div", { class: "line" }, ["CREATE OPERATOR PASSWORD (MIN 4 CHARS)"]));
+      const p1 = el("input", { type: "password", "data-focus": "", id: "wiz-pw1" });
+      const p2 = el("input", { type: "password", "data-focus": "", id: "wiz-pw2", placeholder: "confirm" });
+      const err = el("div", { class: "line dim", id: "wiz-err" }, [""]);
+      const btn = el("button", { "data-focus": "", onclick: () => this.submitPassword() }, ["[ CONTINUE ]"]);
+      body.appendChild(el("div", { class: "line" }, [p1]));
+      body.appendChild(el("div", { class: "line" }, [p2]));
+      body.appendChild(err);
+      body.appendChild(el("div", { class: "line" }, [btn]));
+      uname.focus();
+    } else if (this.step === 2) {
+      body.appendChild(el("div", { class: "line glow" }, ["CONNECT THIS UNIT TO THE INTERNET?"]));
+      const yes = el("button", { class: "choice-btn", "data-focus": "", onclick: () => this.chooseWifi(true) }, ["YES -- OPEN WI-FI SETUP"]);
+      const no = el("button", { class: "choice-btn", "data-focus": "", onclick: () => this.chooseWifi(false) }, ["NO -- STAY OFFLINE"]);
+      body.appendChild(el("div", { class: "line" }, [yes]));
+      body.appendChild(el("div", { class: "line" }, [no]));
+      yes.focus();
+    }
+  },
+  submitPassword() {
+    const uname = $("#wiz-uname").value.trim();
+    const p1 = $("#wiz-pw1").value, p2 = $("#wiz-pw2").value;
+    const err = $("#wiz-err");
+    if (!uname) { err.textContent = "ENTER AN OPERATOR NAME"; return; }
+    if (p1.length < 4) { err.textContent = "TOO SHORT -- MIN 4 CHARACTERS"; return; }
+    if (p1 !== p2) { err.textContent = "PASSWORDS DO NOT MATCH"; return; }
+    this.username = uname; this.pw1 = p1;
+    // Local recovery copy -- explicitly requested so credentials aren't lost
+    // if the operator forgets them. This is a single-user car kiosk, not a
+    // shared/multi-tenant system, so a plain localStorage copy is acceptable
+    // here; it never leaves the device.
+    LS.set("operator", { username: uname, password: p1 });
+    Net.send({ type: "setpass", username: uname, password: p1 });
+    this.step = 2; this.render();
+  },
+  chooseWifi(yes) {
+    this.wifiPending = yes;
+    Config.set("setup_done", true);
+    Boot.play(() => {
+      showScreen("shell");
+      setTab(this.wifiPending ? "settings" : "home");
+      if (this.wifiPending) setTimeout(() => Wifi.open(), 300);
+    });
+  },
+};
+
+/* ============================================================================
+ * BOOT ANIMATION
+ * ========================================================================== */
+const Boot = {
+  play(done) {
+    showScreen("boot");
+    const body = $("#boot-body");
+    body.innerHTML = "";
+    const lines = [
+      "GOST/PERIMETR OS v3.0.0",
+      "INIT KERNEL ....................",
+      "MOUNTING /opt/gost/media .......",
+      "STARTING TELEMETRY BUS .........",
+      "LINKING WEBSOCKET 127.0.0.1:8765",
+      "LOADING GUIDE ENGINE ...........",
+      "KIOSK COMPOSITOR ................",
+      "",
+      "WELCOME OPERATOR",
+    ];
+    let i = 0;
+    const next = () => {
+      if (i >= lines.length) { setTimeout(done, 500); return; }
+      const line = lines[i];
+      const row = el("div", { class: "line" }, [line]);
+      if (line.endsWith(".") || line.endsWith("...............") || i === 4) {
+        const ok = el("span", { class: "ok" }, [i === 4 ? (Net.connected ? "[OK]" : "[FAIL]") : "[OK]"]);
+        row.appendChild(ok);
+      }
+      body.appendChild(row);
+      i++;
+      setTimeout(next, 220);
+    };
+    next();
+  },
+};
+
+/* ============================================================================
+ * SCREEN / TAB MANAGEMENT
+ * ========================================================================== */
+const State = { tab: "home" };
+function showScreen(name) {
+  for (const s of ["wizard", "boot", "shell"]) $("#" + s).classList.toggle("hidden", s !== name);
+}
+function setTab(name) {
+  State.tab = name;
+  for (const t of TABS) $("#tab-" + t).classList.toggle("active", t === name);
+  $all("#tabbar button").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
+  if (name === "nav") Nav.activate();
+  if (name === "settings") renderAbout(LastInfo.data);
+  setTimeout(() => { const f = focusables()[0]; if (f) f.focus(); }, 0);
+}
+const LastInfo = { data: { version: "3.0.0", hostname: "unknown" } };
+
+function buildTabbar() {
+  const bar = $("#tabbar");
+  bar.innerHTML = "";
+  for (const t of TABS) {
+    bar.appendChild(el("button", { "data-tab": t, onclick: () => setTab(t) }, [TAB_LABELS[t]]));
+  }
+}
+
+function buildHome() {
+  const list = $("#home-list");
+  list.innerHTML = "";
+  const descs = {
+    drive: "Live EV/gas telemetry -- SOC, range, power, temps",
+    hud: "Instrument cluster -- speed, RPM, boost, DTC codes",
+    tv: "Broadcast-simulation channels 3-82 + YouTube",
+    guide: "Program the station -- schedule blocks per weekday",
+    music: "Music & podcasts -- keeps playing across all tabs",
+    nav: "Offline MapLibre/PMTiles maps with GPS puck",
+    settings: "Source mode, Wi-Fi, themes, dashcam, updates",
+  };
+  for (const t of TABS.filter(x => x !== "home")) {
+    list.appendChild(el("button", { class: "home-item", "data-focus": "", onclick: () => setTab(t) }, [
+      TAB_LABELS[t], el("span", { class: "desc" }, [descs[t]]),
+    ]));
+  }
+}
+
+/* ============================================================================
+ * DRIVE TAB
+ * ========================================================================== */
+function renderDrive(t) {
+  const overlay = $("#drive-notconnected");
+  const connected = t && t.connected;
+  overlay.classList.toggle("hidden", !!connected);
+  if (!connected) return;
+  const v = t.values || {}, d = t.derived || {};
+  const vtype = t.vtype;
+  let socLabel, socVal, rangeVal, energyLabel, energyVal;
+  if (vtype === "ev" || vtype === "hybrid") {
+    socLabel = "STATE OF CHARGE"; socVal = v.HYBRID_BATTERY_REMAINING;
+    rangeVal = socVal != null ? Math.round((socVal / 100) * 260) : null;
+    energyLabel = "PACK"; energyVal = socVal != null ? (socVal / 100 * 75).toFixed(1) + " kWh" : "--";
+  } else {
+    socLabel = "FUEL LEVEL"; socVal = v.FUEL_LEVEL;
+    const mpg = d.mpg || 24;
+    rangeVal = socVal != null ? Math.round((socVal / 100) * 26 * mpg) : null;
+    energyLabel = "ECONOMY"; energyVal = d.mpg != null ? d.mpg.toFixed(1) + " MPG" : "EV";
+  }
+  const grid = $("#drive-grid");
+  grid.innerHTML = "";
+  const box = (label, value) => el("div", { class: "stat-box" }, [
+    el("div", { class: "label" }, [label]), el("div", { class: "value glow" }, [value]),
+  ]);
+  grid.appendChild(box(socLabel, socVal != null ? Math.round(socVal) + "%" : "--"));
+  grid.appendChild(box("RANGE", rangeVal != null ? rangeVal + " MI" : "--"));
+  grid.appendChild(box("SPEED", d.mph != null ? Math.round(d.mph) + " MPH" : "--"));
+  grid.appendChild(box(energyLabel, energyVal));
+  const powerFrac = d.mph != null ? clamp(d.mph / 90, -1, 1) : 0;
+  const pbar = el("div", { class: "stat-box", style: "grid-column: span 2;" }, [
+    el("div", { class: "label" }, ["POWER / REGEN"]),
+    el("div", { class: "pbar" }, [el("div", { class: "fill", style: `width:${Math.abs(powerFrac) * 50}%; ${powerFrac >= 0 ? "left:50%" : `right:50%`}` })]),
+  ]);
+  grid.appendChild(pbar);
+  grid.appendChild(box("COOLANT", d.coolant_f != null ? Math.round(d.coolant_f) + " F" : "--"));
+  grid.appendChild(box("12V BATT", v.CONTROL_MODULE_VOLTAGE != null ? v.CONTROL_MODULE_VOLTAGE.toFixed(1) + " V" : "--"));
+}
+
+/* ============================================================================
+ * HUD TAB
+ * ========================================================================== */
+const HudGhost = { history: [] };
+function renderHud(t) {
+  const v = (t && t.values) || {}, d = (t && t.derived) || {};
+  const speed = d.mph != null ? Math.round(d.mph) : null;
+  HudGhost.history.push(speed);
+  if (HudGhost.history.length > 6) HudGhost.history.shift();
+  const wrap = $("#hud-speed-wrap");
+  wrap.innerHTML = "";
+  HudGhost.history.forEach((s, i) => {
+    const age = HudGhost.history.length - 1 - i;
+    const op = age === 0 ? 1 : Math.max(0, 0.35 - age * 0.08);
+    if (s == null) return;
+    wrap.appendChild(el("div", { class: "ghost" + (age === 0 ? " glow" : ""), style: `opacity:${op};` }, [String(s)]));
+  });
+
+  const vtype = t && t.vtype;
+  const socOrFuel = vtype === "gas" ? (v.FUEL_LEVEL != null ? v.FUEL_LEVEL : null) : v.HYBRID_BATTERY_REMAINING;
+  const socLabel = vtype === "gas" ? "FUEL LEVEL" : "HV SOC";
+  const gauges = [
+    ["RPM", v.RPM, 0, 7000, fmt0(v.RPM)],
+    ["BOOST PSI", d.boost_psi, 0, 20, fmt1(d.boost_psi)],
+    [socLabel, socOrFuel, 0, 100, fmt0(socOrFuel) + "%"],
+    ["COOLANT F", d.coolant_f, 100, 260, fmt0(d.coolant_f)],
+    ["OIL F", d.oil_f, 100, 300, fmt0(d.oil_f)],
+    ["12V BATT", v.CONTROL_MODULE_VOLTAGE, 10, 15, fmt1(v.CONTROL_MODULE_VOLTAGE)],
+  ];
+  const gwrap = $("#hud-gauges");
+  gwrap.innerHTML = "";
+  gauges.forEach(([label, val, min, max, numStr]) => {
+    const isBatt = label === "12V BATT";
+    const alarm = isBatt && val != null && val < 12.0;
+    gwrap.appendChild(el("div", { class: "gauge" + (alarm ? " alarm" : "") }, [
+      el("div", { class: "label" }, [label]),
+      el("div", { class: "bar" }, [blockBar(val, min, max, 16)]),
+      el("div", { class: "num" }, [numStr]),
+    ]));
+  });
+
+  const dtcs = (t && t.dtcs) || {};
+  const dtcCount = Object.keys(dtcs).length;
+  const mpgTxt = d.mpg != null ? d.mpg.toFixed(1) + " MPG" : "EV";
+  $("#hud-status-line").textContent =
+    `SRC: ${srcModeLabel(t && t.source_mode)}  //  ${mpgTxt}  //  DTC: ${dtcCount}`;
+
+  const panel = $("#dtc-panel");
+  panel.classList.toggle("hidden", dtcCount === 0);
+  if (dtcCount) {
+    panel.innerHTML = '<div data-title-placeholder></div>';
+    panel.setAttribute("data-title", "DTC");
+    Object.entries(dtcs).forEach(([code, info]) => {
+      panel.appendChild(el("div", { class: "dtc-row" }, [
+        el("span", {}, [code + " -- " + (info.desc || "")]),
+        el("span", { class: "dim" }, [info.first_seen || ""]),
+      ]));
+    });
+  }
+}
+
+/* ============================================================================
+ * TV TAB
+ * ========================================================================== */
+/** Every channel 3-82 always exists, like a real tuner dial -- empty ones just
+ * show OFF AIR until GUIDE puts something on them. Fixes the "no channels"
+ * empty-list problem: there's always something to look at and tune to. */
+function fixedChannelDial() {
+  const dial = {};
+  for (let n = 3; n <= 82; n++) dial[String(n)] = { name: "CH", files: [] };
+  return dial;
+}
+
+const TV = {
+  watching: false, chan: null, mode: "off", reresolveTimer: null,
+  demoFiles: fixedChannelDial(), commercials: [],
+
+  channels() {
+    const dial = fixedChannelDial();
+    const real = Net.connected ? (Net.library.channels || {}) : this.demoFiles;
+    for (const num of Object.keys(real)) dial[num] = real[num];
+    return dial;
+  },
+  allChans() { return Object.keys(this.channels()).sort((a, b) => Number(a) - Number(b)); },
+
+  tune(chan) {
+    this.chan = chan; this.watching = true;
+    showChannelOSD(chan); // always resets its own 5s timer, never accumulates
+    if (Net.connected) { Net.send({ type: "tv.tune", chan }); renderTvStatus(); return; }
+    if (chan === "83") {
+      $("#tv-idle").classList.add("hidden");
+      $("#tv-video").classList.add("hidden"); $("#tv-video").pause();
+      $("#tv-static-canvas").classList.add("hidden");
+      stopStaticAnim();
+      $("#tv-overlay-text").textContent = "CH83 -- YOUTUBE (HOLD <- 5s TO RETURN)";
+      Overlay.open("https://www.youtube.com/embed?listType=user_uploads");
+      return;
+    }
+    this._playLocal();
+    if (this.reresolveTimer) clearInterval(this.reresolveTimer);
+    this.reresolveTimer = setInterval(() => this._playLocal(true), 30000);
+  },
+  step(delta) {
+    const chans = this.allChans().concat("83"); // dial wraps 03..82..83..03
+    if (!chans.length) return;
+    let idx = chans.indexOf(this.chan);
+    idx = idx === -1 ? 0 : (idx + delta + chans.length) % chans.length;
+    this.tune(chans[idx]);
+  },
+  pauseToggle() {
+    if (Net.connected) { Net.send({ type: "tv.pause" }); return; }
+    const video = $("#tv-video");
+    if (video.classList.contains("hidden")) return;
+    if (video.paused) video.play(); else video.pause();
+  },
+  exit() {
+    this.watching = false; this.chan = null;
+    if (this.reresolveTimer) { clearInterval(this.reresolveTimer); this.reresolveTimer = null; }
+    stopStaticAnim();
+    if (Net.connected) { Net.send({ type: "tv.exit" }); return; }
+    $("#tv-video").classList.add("hidden"); $("#tv-video").pause();
+    $("#tv-static-canvas").classList.add("hidden");
+    $("#tv-idle").classList.remove("hidden");
+    $("#tv-overlay-text").textContent = "";
+  },
+  _playLocal(forced) {
+    const res = resolveChannel(this.chan, this.channels(), this.commercials, Config.data.guide3 || {});
+    $("#tv-idle").classList.add("hidden");
+    const video = $("#tv-video"), canvas = $("#tv-static-canvas");
+    if (res.kind === "show" || res.kind === "commercial") {
+      stopStaticAnim();
+      canvas.classList.add("hidden");
+      video.classList.remove("hidden");
+      if (!res.file.url) {
+        // File not reattached this session (page reload lost the blob).
+        video.classList.add("hidden"); canvas.classList.remove("hidden");
+        startStaticAnim(canvas, "NO SOURCE (reselect file)");
+      } else {
+        // Always seek to the wall-clock offset and always play. The old code
+        // skipped BOTH when the src was already loaded, so re-tuning a
+        // channel resumed wherever the video happened to be paused (or not
+        // at all) instead of where the broadcast clock says it should be.
+        const applyOffset = () => {
+          try {
+            // 5s drift tolerance: the 30s re-resolve shouldn't cause a
+            // visible stutter-seek when playback is already on time.
+            if (Math.abs(video.currentTime - res.offset) > 5) video.currentTime = res.offset;
+          } catch (e) {}
+          video.play().catch(() => {
+            // Autoplay-with-sound blocked (browser policy): retry muted so
+            // the broadcast at least runs; on-device mpv handles audio.
+            video.muted = true;
+            video.play().catch(() => {});
+          });
+        };
+        if (video.dataset.src !== res.file.url) {
+          video.src = res.file.url; video.dataset.src = res.file.url;
+          video.onloadedmetadata = applyOffset;
+        } else if (video.readyState >= 1) {
+          applyOffset();
+        } else {
+          video.onloadedmetadata = applyOffset;
+        }
+      }
+      video.onended = () => this._playLocal(true);
+      $("#tv-overlay-text").textContent = `CH${this.chan} -- ${res.kind === "commercial" ? "COMMERCIAL" : (this.channels()[this.chan] || {}).name || ""}`;
+    } else {
+      video.classList.add("hidden"); video.pause();
+      canvas.classList.remove("hidden");
+      startStaticAnim(canvas, res.reason === "off_air" ? "OFF AIR" : "STATIC");
+      $("#tv-overlay-text").textContent = `CH${this.chan} -- ${res.reason || "static"}`;
+    }
+  },
+  supervisorTick() {
+    if (!this.watching || Net.connected) return;
+    const video = $("#tv-video");
+    if (!video.classList.contains("hidden") && video.ended) this._playLocal(true);
+  },
+};
+
+/* Continuously-animated static (~15fps, downsampled + scaled up for that
+ * chunky CRT-noise look and to keep it cheap on Pi-class hardware) --
+ * previously this drew a single frame and left it frozen. */
+let _staticAnimId = null, _staticOffscreen = null;
+function startStaticAnim(canvas, label) {
+  stopStaticAnim();
+  const ctx = canvas.getContext("2d");
+  const iw = Math.max(1, Math.floor(canvas.width / 3)), ih = Math.max(1, Math.floor(canvas.height / 3));
+  if (!_staticOffscreen) _staticOffscreen = document.createElement("canvas");
+  _staticOffscreen.width = iw; _staticOffscreen.height = ih;
+  const offCtx = _staticOffscreen.getContext("2d");
+  const img = offCtx.createImageData(iw, ih);
+  let last = 0;
+  function frame(t) {
+    if (t - last > 66) {
+      last = t;
+      const d = img.data;
+      for (let i = 0; i < d.length; i += 4) {
+        const v = (Math.random() * 255) | 0;
+        d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255;
+      }
+      offCtx.putImageData(img, 0, 0);
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(_staticOffscreen, 0, 0, iw, ih, 0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillRect(0, canvas.height / 2 - 12, canvas.width, 24);
+      ctx.fillStyle = "#fff"; ctx.font = "14px monospace"; ctx.textAlign = "center";
+      ctx.fillText(label, canvas.width / 2, canvas.height / 2 + 5);
+    }
+    _staticAnimId = requestAnimationFrame(frame);
+  }
+  _staticAnimId = requestAnimationFrame(frame);
+}
+function stopStaticAnim() {
+  if (_staticAnimId) { cancelAnimationFrame(_staticAnimId); _staticAnimId = null; }
+}
+
+let _osdTimer = null;
+function showChannelOSD(chan) {
+  const info = TV.channels()[chan];
+  const name = chan === "83" ? "YOUTUBE" : (info ? info.name : "");
+  $("#tv-osd .osd-num").textContent = String(chan).padStart(2, "0");
+  $("#tv-osd .osd-name").textContent = name;
+  $("#tv-osd").classList.add("show");
+  clearTimeout(_osdTimer);
+  _osdTimer = setTimeout(() => $("#tv-osd").classList.remove("show"), 5000);
+}
+setInterval(() => { if (TV.watching) TV.supervisorTick(); }, 1000);
+
+function renderTvChannelList() {
+  const box = $("#tv-channels");
+  box.innerHTML = "";
+  const chans = TV.allChans();
+  for (const c of chans) {
+    const info = TV.channels()[c];
+    const meta = info.files && info.files.length ? "ON-AIR" : "OFF AIR";
+    box.appendChild(el("button", { class: "tv-chan-row", "data-focus": "", onclick: () => TV.tune(c) },
+      [`${c.padStart(2, "0")} ${info.name || ""}`, el("span", { class: "dim", style: "float:right;" }, [meta])]));
+  }
+  box.appendChild(el("button", { class: "tv-chan-row", "data-focus": "", onclick: () => TV.tune("83") }, ["83 YOUTUBE"]));
+}
+function renderTvStatus() {
+  if (!Net.tvStatus) return;
+  $("#tv-overlay-text").textContent = `CH${Net.tvStatus.chan || "--"} -- ${Net.tvStatus.mode.toUpperCase()}${Net.tvStatus.paused ? " (PAUSED)" : ""}`;
+  $("#tv-idle").classList.toggle("hidden", !!Net.tvStatus.chan);
+}
+TabHandlers.tv = {
+  onAction(action) {
+    if (!TV.watching) return false;
+    if (action === "up") { TV.step(1); return true; }
+    if (action === "down") { TV.step(-1); return true; }
+    if (action === "enter") { TV.pauseToggle(); return true; }
+    return true;
+  },
+};
+TabHandlers.nav = {
+  onAction(action) {
+    if (!Nav.map) return false;
+    if (Nav.destMode) {
+      const px = 60;
+      if (action === "up") Nav.map.panBy([0, -px]);
+      else if (action === "down") Nav.map.panBy([0, px]);
+      else if (action === "left") Nav.map.panBy([-px, 0]);
+      else if (action === "right") Nav.map.panBy([px, 0]);
+      else if (action === "enter") Nav.confirmDestinationAtCenter();
+      return true;
+    }
+    if (Nav.mapMode) {
+      const px = 60;
+      if (action === "up") Nav.map.panBy([0, -px]);
+      else if (action === "down") Nav.map.panBy([0, px]);
+      else if (action === "left") Nav.map.panBy([-px, 0]);
+      else if (action === "right") Nav.map.panBy([px, 0]);
+      else if (action === "enter") Nav.map.zoomTo(Math.min(18, Nav.map.getZoom() + 1));
+      return true;
+    }
+    // Neither mode active: fall through to normal focus/click handling so
+    // the [ MAP MODE ] / [ SET DESTINATION ] / [ CLEAR ROUTE ] buttons work
+    // like any other focusable element (Enter must not be hijacked here,
+    // or the pad could never reach those buttons in the first place).
+    return false;
+  },
+};
+
+/* ============================================================================
+ * GUIDE TAB (station manager)
+ * ========================================================================== */
+const Guide = { selectedChan: null, selectedDay: "sun", pendingFile: null };
+
+function probeVideoDuration(file) {
+  return new Promise((resolve) => {
+    const v = document.createElement("video");
+    v.preload = "metadata";
+    v.onloadedmetadata = () => { URL.revokeObjectURL(v.src); resolve(Math.round(v.duration)); };
+    v.onerror = () => resolve(30);
+    v.src = URL.createObjectURL(file);
+  });
+}
+
+function renderGuideChannelList() {
+  const box = $("#guide-channels");
+  box.innerHTML = "";
+  box.appendChild(el("button", { class: "tv-chan-row", "data-focus": "", onclick: () => selectGuideChan("00") }, ["00 COMMERCIALS"]));
+  const chans = TV.allChans();
+  for (const c of chans) {
+    const info = TV.channels()[c];
+    const meta = info.files && info.files.length ? "ON-AIR" : "EMPTY";
+    box.appendChild(el("button", { class: "tv-chan-row", "data-focus": "", onclick: () => selectGuideChan(c) },
+      [c.padStart(2, "0") + " " + info.name, el("span", { class: "dim", style: "float:right;" }, [meta])]));
+  }
+}
+
+function selectGuideChan(chan) {
+  // Clear any armed placement -- it must never survive a channel switch,
+  // or the next slot clicked (on a different channel) would place it there.
+  Guide.pendingFile = null;
+  Guide.selectedChan = chan;
+  renderGuideMain();
+}
+
+function renderGuideMain() {
+  const main = $("#guide-main");
+  main.innerHTML = "";
+  if (!Guide.selectedChan) { main.appendChild(el("div", { class: "dim" }, ["SELECT A CHANNEL"])); return; }
+  const isCommercials = Guide.selectedChan === "00";
+
+  const addBtn = el("button", { "data-focus": "" }, ["[ + ADD FILES ]"]);
+  const fileInput = el("input", { type: "file", accept: "video/*", multiple: "", class: "hidden" });
+  addBtn.addEventListener("click", () => fileInput.click());
+  fileInput.addEventListener("change", async () => {
+    for (const f of fileInput.files) {
+      const dur = await probeVideoDuration(f);
+      const entry = { name: f.name, duration: dur, url: URL.createObjectURL(f) };
+      if (isCommercials) TV.commercials.push(entry);
+      else {
+        const ch = TV.demoFiles[Guide.selectedChan] || (TV.demoFiles[Guide.selectedChan] = { name: "CH" + Guide.selectedChan, files: [] });
+        ch.files.push(entry);
+      }
+    }
+    renderGuideMain(); renderTvChannelList();
+  });
+  main.appendChild(el("div", {}, [addBtn, fileInput]));
+
+  const files = isCommercials ? TV.commercials : ((TV.demoFiles[Guide.selectedChan] || {}).files || []);
+  const fileList = el("div", { style: "margin-top:8px;" });
+  files.forEach((f, idx) => {
+    const row = el("div", { class: "file-row" }, [
+      el("span", {}, [f.name + `  (${f.duration}s)`]),
+    ]);
+    if (!isCommercials) {
+      row.appendChild(el("button", { "data-focus": "", onclick: () => { Guide.pendingFile = f; renderGuideMain(); } }, ["[ PLACE ]"]));
+    }
+    row.appendChild(el("button", { "data-focus": "", onclick: () => { files.splice(idx, 1); renderGuideMain(); } }, ["[ X ]"]));
+    fileList.appendChild(row);
+  });
+  main.appendChild(fileList);
+
+  if (isCommercials) return; // commercials have no day schedule
+
+  const dayTabs = el("div", { class: "day-tabs", style: "margin-top:12px;" });
+  WEEKDAYS.forEach(d => {
+    const btn = el("button", { class: d === Guide.selectedDay ? "active" : "" }, [d.toUpperCase()]);
+    // Clearing pendingFile here is the fix for the "file placed on the wrong
+    // day" bug: without it, a file armed via [PLACE] stayed armed across day
+    // (and channel) switches, so the next slot clicked anywhere placed it.
+    btn.addEventListener("click", () => { Guide.pendingFile = null; Guide.selectedDay = d; renderGuideMain(); });
+    dayTabs.appendChild(btn);
+  });
+  main.appendChild(dayTabs);
+
+  if (Guide.pendingFile) {
+    const banner = el("div", { class: "frame", "data-title": "PLACING" }, [
+      `${Guide.pendingFile.name} -- click an open slot below to schedule it. ` +
+      `Dimmed slots can't fit this file (it would overlap another block or run past midnight).  `,
+    ]);
+    const cancelBtn = el("button", { "data-focus": "" }, ["[ CANCEL ]"]);
+    cancelBtn.addEventListener("click", () => { Guide.pendingFile = null; renderGuideMain(); });
+    banner.appendChild(cancelBtn);
+    main.appendChild(banner);
+  }
+
+  const guide3 = Config.data.guide3 || {};
+  const daySchedule = ((guide3[Guide.selectedChan] || {})[Guide.selectedDay]) || [];
+  const grid = el("div", { id: "guide-grid" });
+  const avail = Guide.pendingFile ? slotAvailability(daySchedule, Math.ceil(Guide.pendingFile.duration / 60)) : new Array(48).fill(true);
+  const sortedBlocks = daySchedule.slice().sort((a, b) => a.s - b.s);
+  // DirecTV-style spanning grid: a block occupies ceil(duration/30) cells,
+  // rendered as one wide cell (not just its start slot marked), and slots
+  // it covers are skipped rather than re-rendered as separate empty cells.
+  let slot = 0;
+  while (slot < 48) {
+    const start = slot * 30;
+    const hh = pad2(Math.floor(start / 60)), mm = pad2(start % 60);
+    const block = sortedBlocks.find(b => b.s === start);
+    if (block) {
+      const span = Math.max(1, Math.min(Math.ceil(block.d / 30), 48 - slot));
+      const cell = el("button", {
+        class: "slot occupied", style: `grid-column: span ${span};`, title: `${hh}:${mm} -- ${block.f}`,
+      }, [`${hh}:${mm}\n${block.f}`]);
+      cell.addEventListener("click", () => removeGuideBlock(Guide.selectedChan, Guide.selectedDay, block.s));
+      grid.appendChild(cell);
+      slot += span;
+      continue;
+    }
+    const cell = el("button", { class: "slot" + (!avail[slot] ? " blocked" : ""), title: `${hh}:${mm}` }, [`${hh}:${mm}`]);
+    if (Guide.pendingFile && avail[slot]) {
+      cell.addEventListener("click", () => placeGuideBlock(Guide.selectedChan, Guide.selectedDay, start, Guide.pendingFile));
+    } else {
+      cell.disabled = true;
+    }
+    grid.appendChild(cell);
+    slot += 1;
+  }
+  main.appendChild(grid);
+}
+
+function placeGuideBlock(chan, day, start, file) {
+  const guide3 = Config.data.guide3 || {};
+  guide3[chan] = guide3[chan] || {};
+  guide3[chan][day] = guide3[chan][day] || [];
+  guide3[chan][day].push({ s: start, d: Math.ceil(file.duration / 60), f: file.name });
+  const clean = sanitizeGuide3(guide3); // belt-and-suspenders, same as backend
+  Config.set("guide3", clean);
+  Guide.pendingFile = null;
+  renderGuideMain();
+}
+function removeGuideBlock(chan, day, start) {
+  const guide3 = Config.data.guide3 || {};
+  if (guide3[chan] && guide3[chan][day]) {
+    guide3[chan][day] = guide3[chan][day].filter(b => b.s !== start);
+    Config.set("guide3", sanitizeGuide3(guide3));
+  }
+  renderGuideMain();
+}
+
+/* ============================================================================
+ * MUSIC / PODCASTS -- global <audio> element persists across ALL tab
+ * switches. Two separate pools (music vs podcast), each grouped by genre
+ * for quick browsing, plus a now-playing view with a seekable waveform.
+ * ========================================================================== */
+const Music = {
+  pool: "music", selectedGenre: null,
+  localTracks: { music: [], podcast: [] },
+  current: null, // { pool, name, genre, duration }
+  waveCache: {},
+};
+
+function musicPoolTracks(pool) {
+  if (Net.connected) return (pool === "podcast" ? Net.library.podcasts : Net.library.music) || [];
+  return Music.localTracks[pool];
+}
+function musicGenresFor(pool) {
+  const set = new Set();
+  musicPoolTracks(pool).forEach(t => set.add(t.genre || "UNSORTED"));
+  return Array.from(set).sort();
+}
+function probeAudioDuration(file) {
+  return new Promise((resolve) => {
+    const a = new Audio();
+    a.preload = "metadata";
+    a.onloadedmetadata = () => resolve(Math.round(a.duration));
+    a.onerror = () => resolve(180);
+    a.src = URL.createObjectURL(file);
+  });
+}
+
+function initMusic() {
+  $("#music-pool-music-btn").addEventListener("click", () => switchMusicPool("music"));
+  $("#music-pool-podcast-btn").addEventListener("click", () => switchMusicPool("podcast"));
+  $("#music-add-btn").addEventListener("click", () => $("#music-file-input").click());
+  $("#music-file-input").addEventListener("change", (e) => {
+    const files = Array.from(e.target.files);
+    e.target.value = "";
+    if (!files.length) return;
+    Modal.open(`GENRE FOR ${files.length} FILE(S)`, (body) => {
+      const input = el("input", { type: "text", "data-focus": "", placeholder: "e.g. ROCK, TRUE CRIME (blank = UNSORTED)", list: "genre-datalist" });
+      const datalist = el("datalist", { id: "genre-datalist" });
+      musicGenresFor(Music.pool).forEach(g => datalist.appendChild(el("option", { value: g }, [])));
+      const confirmBtn = el("button", { "data-focus": "" }, ["[ ADD ]"]);
+      confirmBtn.addEventListener("click", async () => {
+        const genre = input.value.trim().toUpperCase() || "UNSORTED";
+        for (const f of files) {
+          const dur = await probeAudioDuration(f);
+          Music.localTracks[Music.pool].push({ name: f.name, url: URL.createObjectURL(f), duration: dur, genre });
+        }
+        Modal.close();
+        renderMusicGenres(); renderMusicTracks();
+      });
+      body.appendChild(el("div", {}, [input, datalist]));
+      body.appendChild(el("div", { style: "margin-top:10px;" }, [confirmBtn]));
+    });
+  });
+  $("#global-audio").addEventListener("ended", () => Music.playNextInView());
+  $("#global-audio").addEventListener("timeupdate", () => renderNowPlaying());
+  $("#global-audio").addEventListener("play", () => renderNowPlaying());
+  $("#global-audio").addEventListener("pause", () => renderNowPlaying());
+  // Waveform animation ticker -- only re-renders while something is playing
+  // AND the music tab is on screen, so it costs nothing the rest of the time.
+  setInterval(() => {
+    if (!$("#global-audio").paused && State.tab === "music" && Music.current) renderNowPlaying();
+  }, 150);
+  switchMusicPool("music");
+}
+
+function switchMusicPool(pool) {
+  Music.pool = pool;
+  Music.selectedGenre = null;
+  $("#music-pool-music-btn").classList.toggle("active", pool === "music");
+  $("#music-pool-podcast-btn").classList.toggle("active", pool === "podcast");
+  renderMusicGenres();
+  renderMusicTracks();
+}
+
+function renderMusicGenres() {
+  const box = $("#music-genres");
+  box.innerHTML = "";
+  const allBtn = el("button", { class: "genre-chip" + (Music.selectedGenre === null ? " active" : ""), "data-focus": "" }, ["ALL"]);
+  allBtn.addEventListener("click", () => { Music.selectedGenre = null; renderMusicGenres(); renderMusicTracks(); });
+  box.appendChild(allBtn);
+  musicGenresFor(Music.pool).forEach(g => {
+    const btn = el("button", { class: "genre-chip" + (Music.selectedGenre === g ? " active" : ""), "data-focus": "" }, [g]);
+    btn.addEventListener("click", () => { Music.selectedGenre = g; renderMusicGenres(); renderMusicTracks(); });
+    box.appendChild(btn);
+  });
+}
+
+function renderMusicTracks() {
+  const box = $("#music-tracks");
+  box.innerHTML = "";
+  const tracks = musicPoolTracks(Music.pool).filter(t => Music.selectedGenre === null || (t.genre || "UNSORTED") === Music.selectedGenre);
+  if (!tracks.length) { box.appendChild(el("div", { class: "dim" }, ["NOTHING HERE YET -- ADD FILES ABOVE"])); return; }
+  tracks.forEach((t) => {
+    const isCurrent = Music.current && Music.current.pool === Music.pool && Music.current.name === t.name;
+    const row = el("div", { class: "music-row" }, [
+      el("span", {}, [(isCurrent ? "> " : "  ") + t.name]),
+      el("span", { class: "dim" }, [t.genre || "UNSORTED"]),
+    ]);
+    const btn = el("button", { "data-focus": "" }, ["▶"]);
+    btn.addEventListener("click", () => Music.play(Music.pool, t));
+    row.appendChild(btn);
+    box.appendChild(row);
+  });
+}
+
+Music.play = function (pool, track) {
+  this.current = { pool, name: track.name, genre: track.genre, duration: track.duration };
+  const audio = $("#global-audio");
+  audio.src = Net.connected ? "/media/" + track.path : track.url;
+  audio.play().catch(() => {});
+  renderMusicTracks();
+  renderNowPlaying();
+};
+Music.toggle = function () {
+  const audio = $("#global-audio");
+  if (!this.current) {
+    const first = musicPoolTracks(this.pool)[0];
+    if (first) this.play(this.pool, first);
+    return;
+  }
+  if (audio.paused) audio.play(); else audio.pause();
+};
+Music.playNextInView = function () {
+  const tracks = musicPoolTracks(this.pool).filter(t => this.selectedGenre === null || (t.genre || "UNSORTED") === this.selectedGenre);
+  if (!tracks.length || !this.current) return;
+  const idx = tracks.findIndex(t => t.name === this.current.name);
+  const next = tracks[(idx + 1) % tracks.length];
+  if (next) this.play(this.pool, next);
+};
+Music.seekFrac = function (frac) {
+  const audio = $("#global-audio");
+  if (audio.duration) audio.currentTime = frac * audio.duration;
+};
+
+function seededWaveBars(name, count) {
+  if (Music.waveCache[name]) return Music.waveCache[name];
+  let seed = 0;
+  for (let i = 0; i < name.length; i++) seed = (seed * 31 + name.charCodeAt(i)) >>> 0;
+  const bars = [];
+  for (let i = 0; i < count; i++) {
+    seed = (seed * 1103515245 + 12345) >>> 0;
+    bars.push(20 + (seed % 800) / 10); // 20-100%, stable per track name
+  }
+  Music.waveCache[name] = bars;
+  return bars;
+}
+function fmtClockLen(s) {
+  if (s == null || isNaN(s)) return "--:--";
+  s = Math.max(0, Math.round(s));
+  return `${Math.floor(s / 60)}:${pad2(s % 60)}`;
+}
+function renderNowPlaying() {
+  const box = $("#music-now-playing");
+  const audio = $("#global-audio");
+  box.innerHTML = "";
+  if (!Music.current) return;
+  const dur = audio.duration || Music.current.duration || 0;
+  const frac = dur ? audio.currentTime / dur : 0;
+  box.appendChild(el("div", { class: "np-kicker" }, [(Music.current.pool === "podcast" ? "PODCAST" : "MUSIC") + " -- NOW PLAYING"]));
+  box.appendChild(el("div", { class: "np-title glow" }, [Music.current.name.replace(/\.[a-z0-9]+$/i, "")]));
+  box.appendChild(el("div", { class: "np-sub" }, [Music.current.genre || "UNSORTED"]));
+  const bars = seededWaveBars(Music.current.name, 48);
+  const wave = el("div", { class: "np-wave" });
+  const t = Date.now() / 1000;
+  bars.forEach((h, i) => {
+    // While playing, modulate each bar over time so the waveform is alive
+    // (VU-meter feel); paused/stopped shows the stable per-track shape.
+    const hh = audio.paused ? h : h * (0.55 + 0.45 * Math.abs(Math.sin(t * 3.1 + i * 0.9)));
+    const bar = el("div", { class: "bar" + (i / bars.length < frac ? " lit" : ""), style: `height:${hh}%;` });
+    bar.addEventListener("click", () => Music.seekFrac(i / bars.length));
+    wave.appendChild(bar);
+  });
+  box.appendChild(wave);
+  box.appendChild(el("div", { class: "np-progress" }, [fmtClockLen(audio.currentTime), "-" + fmtClockLen(dur - audio.currentTime)]));
+  box.appendChild(el("div", { class: "np-bar-track" }, [el("div", { class: "np-bar-fill", style: `width:${frac * 100}%;` })]));
+  const playBtn = el("button", { "data-focus": "" }, [audio.paused ? "▶ PLAY" : "⏸ PAUSE"]);
+  playBtn.addEventListener("click", () => Music.toggle());
+  const volRow = el("div", { class: "np-vol-row" }, ["VOL"]);
+  const volInput = el("input", { type: "range", min: "0", max: "100", value: String(Math.round(audio.volume * 100)), "data-focus": "" });
+  volInput.addEventListener("input", () => { audio.volume = volInput.value / 100; });
+  volRow.appendChild(volInput);
+  box.appendChild(el("div", { class: "np-controls" }, [playBtn, volRow]));
+}
+
+/* ============================================================================
+ * OFFLINE ROUTING -- builds a routable graph straight out of the same
+ * Protomaps vector road tiles used for rendering (no separate routing-graph
+ * download). Limitation, by design: it can only route through road data in
+ * currently-loaded map tiles, has no live traffic and doesn't enforce
+ * one-way restrictions (the basemap schema doesn't reliably carry them) --
+ * this is a lightweight offline MVP, not a full preprocessed routing engine.
+ * ========================================================================== */
+const ROAD_SPEED_KMH = { highway: 90, medium_road: 60, major_road: 50, minor_road: 30, other: 20, path: 5 };
+
+function haversineM(a, b) {
+  const R = 6371000, toRad = d => d * Math.PI / 180;
+  const dLat = toRad(b[1] - a[1]), dLng = toRad(b[0] - a[0]);
+  const lat1 = toRad(a[1]), lat2 = toRad(b[1]);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+function bearingDeg(a, b) {
+  const toRad = d => d * Math.PI / 180, toDeg = r => r * 180 / Math.PI;
+  const y = Math.sin(toRad(b[0] - a[0])) * Math.cos(toRad(b[1]));
+  const x = Math.cos(toRad(a[1])) * Math.sin(toRad(b[1])) - Math.sin(toRad(a[1])) * Math.cos(toRad(b[1])) * Math.cos(toRad(b[0] - a[0]));
+  return (toDeg(Math.atan2(y, x)) + 360) % 360;
+}
+function nodeKey(coord) { return coord[0].toFixed(5) + "," + coord[1].toFixed(5); }
+
+class MinHeap {
+  constructor() { this.arr = []; }
+  size() { return this.arr.length; }
+  push(x) { this.arr.push(x); this._up(this.arr.length - 1); }
+  pop() {
+    const top = this.arr[0], last = this.arr.pop();
+    if (this.arr.length) { this.arr[0] = last; this._down(0); }
+    return top;
+  }
+  _up(i) {
+    while (i > 0) {
+      const p = (i - 1) >> 1;
+      if (this.arr[i].d < this.arr[p].d) { [this.arr[i], this.arr[p]] = [this.arr[p], this.arr[i]]; i = p; }
+      else break;
+    }
+  }
+  _down(i) {
+    const n = this.arr.length;
+    for (;;) {
+      let l = 2 * i + 1, r = 2 * i + 2, s = i;
+      if (l < n && this.arr[l].d < this.arr[s].d) s = l;
+      if (r < n && this.arr[r].d < this.arr[s].d) s = r;
+      if (s === i) break;
+      [this.arr[i], this.arr[s]] = [this.arr[s], this.arr[i]]; i = s;
+    }
+  }
+}
+
+/** features: GeoJSON-ish [{geometry:{type,coordinates}, properties:{kind,name}}] */
+function buildRoadGraph(features) {
+  const nodes = new Map();
+  function getNode(coord) {
+    const k = nodeKey(coord);
+    let n = nodes.get(k);
+    if (!n) { n = { coord, edges: [] }; nodes.set(k, n); }
+    return n;
+  }
+  for (const f of features) {
+    const geom = f.geometry;
+    if (!geom) continue;
+    const lines = geom.type === "LineString" ? [geom.coordinates] : geom.type === "MultiLineString" ? geom.coordinates : [];
+    const kind = (f.properties && f.properties.kind) || "other";
+    const name = (f.properties && f.properties.name) || null;
+    const speedKmh = ROAD_SPEED_KMH[kind] || ROAD_SPEED_KMH.other;
+    for (const coords of lines) {
+      for (let i = 0; i < coords.length - 1; i++) {
+        const a = coords[i], b = coords[i + 1];
+        const d = haversineM(a, b);
+        const t = d / (speedKmh * 1000 / 3600);
+        getNode(a).edges.push({ to: nodeKey(b), dist: d, time: t, name, kind });
+        getNode(b).edges.push({ to: nodeKey(a), dist: d, time: t, name, kind });
+      }
+    }
+  }
+  return { nodes, nodeCount: nodes.size };
+}
+function nearestNode(graph, lngLat) {
+  let best = null, bestD = Infinity;
+  for (const n of graph.nodes.values()) {
+    const d = haversineM(lngLat, n.coord);
+    if (d < bestD) { bestD = d; best = n; }
+  }
+  return best;
+}
+/** Dijkstra by travel time. Returns {coords, edges, totalTime, totalDist} or null. */
+function routeGraph(graph, startLngLat, destLngLat) {
+  if (!graph.nodeCount) return null;
+  const startNode = nearestNode(graph, startLngLat), destNode = nearestNode(graph, destLngLat);
+  if (!startNode || !destNode) return null;
+  const startKey = nodeKey(startNode.coord), destKey = nodeKey(destNode.coord);
+  const dist = new Map([[startKey, 0]]), prev = new Map(), visited = new Set();
+  const pq = new MinHeap();
+  pq.push({ key: startKey, d: 0 });
+  while (pq.size()) {
+    const { key } = pq.pop();
+    if (visited.has(key)) continue;
+    visited.add(key);
+    if (key === destKey) break;
+    const node = graph.nodes.get(key);
+    for (const e of node.edges) {
+      if (visited.has(e.to)) continue;
+      const nd = dist.get(key) + e.time;
+      if (nd < (dist.has(e.to) ? dist.get(e.to) : Infinity)) {
+        dist.set(e.to, nd);
+        prev.set(e.to, { key, edge: e });
+        pq.push({ key: e.to, d: nd });
+      }
+    }
+  }
+  if (!dist.has(destKey)) return null;
+  const pathKeys = [destKey], pathEdges = [];
+  let cur = destKey;
+  while (cur !== startKey) {
+    const p = prev.get(cur);
+    if (!p) return null;
+    pathEdges.unshift(p.edge);
+    cur = p.key;
+    pathKeys.unshift(cur);
+  }
+  const coords = pathKeys.map(k => graph.nodes.get(k).coord);
+  return { coords, edges: pathEdges, totalTime: dist.get(destKey), totalDist: pathEdges.reduce((a, e) => a + e.dist, 0) };
+}
+/** Groups consecutive same-named edges into road segments, then labels each
+ * segment with the maneuver that gets you ONTO it (computed at the junction
+ * where it starts, not where it ends -- the bearing change at a junction
+ * describes the turn onto the next road, not a property of the road you're
+ * leaving). A final zero-distance "ARRIVE" step is appended. */
+function generateTurns(path) {
+  const { coords, edges } = path;
+  if (coords.length < 2 || !edges.length) return [];
+  const segments = [];
+  let curName = edges[0].name, segDist = 0, segStartIdx = 0;
+  for (let i = 0; i < edges.length; i++) {
+    segDist += edges[i].dist;
+    const nextName = edges[i + 1] ? edges[i + 1].name : null;
+    if (nextName !== curName || i === edges.length - 1) {
+      segments.push({ name: curName || "UNNAMED ROAD", distM: segDist, startIdx: segStartIdx, endIdx: i + 1 });
+      curName = nextName; segDist = 0; segStartIdx = i + 1;
+    }
+  }
+  const steps = segments.map((seg, i) => {
+    let instruction;
+    if (i === 0) instruction = "HEAD OUT";
+    else {
+      const j = seg.startIdx;
+      const a = coords[j - 1], b = coords[j], c = coords[Math.min(j + 1, coords.length - 1)];
+      const delta = ((bearingDeg(b, c) - bearingDeg(a, b) + 540) % 360) - 180;
+      if (Math.abs(delta) < 15) instruction = "CONTINUE";
+      else if (delta < 0 && delta >= -135) instruction = "TURN LEFT";
+      else if (delta > 0 && delta <= 135) instruction = "TURN RIGHT";
+      else instruction = "SHARP TURN / U-TURN";
+    }
+    return { instruction, name: seg.name, distM: seg.distM, startIdx: seg.startIdx, endIdx: seg.endIdx };
+  });
+  steps.push({ instruction: "ARRIVE AT DESTINATION", name: null, distM: 0, startIdx: coords.length - 1, endIdx: coords.length });
+  return steps;
+}
+
+/* ============================================================================
+ * NAV TAB -- MapLibre + PMTiles, graceful fallback without maps.
+ * ========================================================================== */
+const Nav = {
+  activated: false, map: null, puck: null, fixTimer: null, lastFix: null, mapMode: false,
+  activate() {
+    if (this.activated) return;
+    this.activated = true;
+    this.tryLoadMaps();
+  },
+  async tryLoadMaps() {
+    let maps = [];
+    try {
+      const resp = await fetch("/api/maps");
+      if (resp.ok) maps = (await resp.json()).maps || [];
+    } catch (e) { /* no backend -- standalone/demo */ }
+    if (!maps.length) {
+      this.showFallback("NO OFFLINE MAP DATA -- drop a .pmtiles region file into /opt/gost/maps via SSH (free extracts at protomaps.com/downloads).");
+      return;
+    }
+    try {
+      if (window.pmtiles && window.maplibregl) {
+        const protocol = new pmtiles.Protocol();
+        maplibregl.addProtocol("pmtiles", protocol.tile);
+        const css = getComputedStyle(document.documentElement);
+        const C = { bg: css.getPropertyValue("--bg").trim(), line: css.getPropertyValue("--line").trim(),
+          pri: css.getPropertyValue("--pri").trim(), dim: css.getPropertyValue("--dim").trim() };
+        // Protomaps basemap schema (earth/water/landuse/buildings/roads/boundaries) --
+        // this is the layer convention used by the free extracts at
+        // protomaps.com/downloads, so any region file downloaded from there
+        // renders correctly without guessing at a vendor-specific schema.
+        this.map = new maplibregl.Map({
+          container: "nav-map", attributionControl: false, dragRotate: false,
+          center: this.lastFix ? [this.lastFix.lon, this.lastFix.lat] : [0, 0],
+          zoom: this.lastFix ? 12 : 2,
+          style: {
+            version: 8,
+            sources: { p: { type: "vector", url: `pmtiles://maps/${maps[0]}` } },
+            layers: [
+              { id: "bg", type: "background", paint: { "background-color": C.bg } },
+              { id: "earth", type: "fill", source: "p", "source-layer": "earth", paint: { "fill-color": C.bg } },
+              { id: "water", type: "fill", source: "p", "source-layer": "water", paint: { "fill-color": "#0a1c22" } },
+              { id: "landuse", type: "fill", source: "p", "source-layer": "landuse", paint: { "fill-color": "#10171a" } },
+              { id: "buildings", type: "fill", source: "p", "source-layer": "buildings", paint: { "fill-color": "#151d20" } },
+              { id: "roads-minor", type: "line", source: "p", "source-layer": "roads",
+                filter: ["in", ["get", "kind"], ["literal", ["minor_road", "other", "path"]]],
+                paint: { "line-color": C.line, "line-width": 1 } },
+              { id: "roads-major", type: "line", source: "p", "source-layer": "roads",
+                filter: ["in", ["get", "kind"], ["literal", ["major_road", "medium_road"]]],
+                paint: { "line-color": C.dim, "line-width": 1.6 } },
+              { id: "roads-hwy", type: "line", source: "p", "source-layer": "roads",
+                filter: ["==", ["get", "kind"], "highway"],
+                paint: { "line-color": C.pri, "line-width": 2.4 } },
+              { id: "boundaries", type: "line", source: "p", "source-layer": "boundaries",
+                paint: { "line-color": C.line, "line-width": 1, "line-dasharray": [3, 2] } },
+            ],
+          },
+        });
+        this.map.on("error", () => this.showFallback("MAP STYLE ERROR -- check the .pmtiles file matches the Protomaps basemap schema."));
+        this.map.on("click", (e) => { if (!this.destMode) this.setDestination(e.lngLat.lng, e.lngLat.lat); });
+        this.puck = new maplibregl.Marker({ color: C.pri });
+        $("#nav-map").classList.remove("hidden");
+        $("#nav-fallback").classList.add("hidden");
+        $("#nav-hud").classList.remove("hidden");
+      } else {
+        this.showFallback("MAP LIBRARY FAILED TO LOAD");
+      }
+    } catch (e) { this.showFallback("MAP INIT FAILED: " + e.message); }
+  },
+  showFallback(msg) {
+    $("#nav-fallback-msg").textContent = msg;
+    $("#nav-fallback").classList.remove("hidden");
+    $("#nav-map").classList.add("hidden");
+    $("#nav-hud").classList.add("hidden");
+    this.drawRadar();
+  },
+  startDemoFix() {
+    let angle = 0;
+    this.fixTimer = setInterval(() => { angle += 0.05; this.onFix(37.7749 + Math.sin(angle) * 0.01, -122.4194 + Math.cos(angle) * 0.01); }, 500);
+  },
+  onFix(lat, lon) {
+    this.lastFix = { lat, lon };
+    const c = $("#nav-coords");
+    if (c) c.textContent = `LAT ${lat.toFixed(5)}  LON ${lon.toFixed(5)}`;
+    if (this.map && this.puck) {
+      try {
+        this.puck.setLngLat([lon, lat]).addTo(this.map);
+        if (!this.routeCoords) this.map.easeTo({ center: [lon, lat], duration: 400 });
+      } catch (e) {}
+    }
+    if (this.routeCoords) this.updateProgress(lat, lon);
+  },
+
+  /* ---- destination picking: click-to-route, or 5-way-pad crosshair mode ---- */
+  toggleDestMode() {
+    if (!this.map) return;
+    this.destMode = !this.destMode;
+    $("#nav-crosshair").classList.toggle("hidden", !this.destMode);
+    $("#nav-set-dest-btn").textContent = this.destMode ? "[ CONFIRM DESTINATION (ENTER) ]" : "[ SET DESTINATION ]";
+  },
+  /** General explore/pan mode, toggled by Enter -- separate from destMode
+   * (which is specifically for picking a destination). Pad: pan on
+   * up/down/left/right, zoom in on Enter, hold-Left 5s exits. */
+  toggleMapMode() {
+    if (!this.map) return;
+    this.mapMode = !this.mapMode;
+    $("#nav-mode-badge").classList.toggle("hidden", !this.mapMode);
+    $("#nav-map-mode-btn").textContent = this.mapMode ? "[ EXIT MAP MODE ]" : "[ MAP MODE ]";
+  },
+  confirmDestinationAtCenter() {
+    if (!this.destMode || !this.map) return;
+    const c = this.map.getCenter();
+    this.toggleDestMode();
+    this.setDestination(c.lng, c.lat);
+  },
+  setDestination(lng, lat) {
+    if (!this.map) return;
+    this.destLngLat = [lng, lat];
+    if (this.destMarker) this.destMarker.remove();
+    this.destMarker = new maplibregl.Marker({ color: getComputedStyle(document.documentElement).getPropertyValue("--warn") })
+      .setLngLat([lng, lat]).addTo(this.map);
+    this.computeRoute();
+  },
+  computeRoute() {
+    if (!this.map || !this.destLngLat) return;
+    const start = this.lastFix ? [this.lastFix.lon, this.lastFix.lat] : [this.map.getCenter().lng, this.map.getCenter().lat];
+    const graph = buildRoadGraph(this.map.querySourceFeatures("p", { sourceLayer: "roads" }));
+    if (!graph.nodeCount) {
+      this.showTurnBanner("NO ROAD DATA IN VIEW -- PAN/ZOOM SO THE ROUTE AREA IS LOADED, THEN SET DESTINATION AGAIN");
+      return;
+    }
+    const path = routeGraph(graph, start, this.destLngLat);
+    if (!path) {
+      this.showTurnBanner("NO ROUTE FOUND IN CURRENTLY LOADED MAP DATA");
+      return;
+    }
+    this.renderRoute(path);
+  },
+  renderRoute(path) {
+    this.routeCoords = path.coords;
+    this.routeEdges = path.edges;
+    this.turnByTurn = generateTurns(path);
+    this.routeProgressIdx = 0;
+    const geojson = { type: "Feature", geometry: { type: "LineString", coordinates: path.coords } };
+    if (this.map.getSource("route")) {
+      this.map.getSource("route").setData(geojson);
+    } else {
+      this.map.addSource("route", { type: "geojson", data: geojson });
+      this.map.addLayer({
+        id: "route-line", type: "line", source: "route",
+        paint: { "line-color": getComputedStyle(document.documentElement).getPropertyValue("--warn"), "line-width": 4 },
+      });
+    }
+    this.renderTurnList();
+    this.updateGuidanceBanner();
+    $("#nav-clear-route-btn").classList.remove("hidden");
+  },
+  renderTurnList() {
+    const box = $("#nav-route-list");
+    box.innerHTML = "";
+    box.classList.remove("hidden");
+    const totalKm = (this.routeEdges.reduce((a, e) => a + e.dist, 0) / 1000).toFixed(1);
+    const totalMin = Math.round(this.routeEdges.reduce((a, e) => a + e.time, 0) / 60);
+    box.appendChild(el("div", { class: "glow" }, [`ROUTE: ${totalKm} KM -- EST ${totalMin} MIN (LOADED-TILE ROADS ONLY)`]));
+    this.turnByTurn.forEach((s, i) => {
+      const suffix = s.name && s.name !== "UNNAMED ROAD" ? ` onto ${s.name}` : "";
+      box.appendChild(el("div", { class: "file-row" }, [`${i + 1}. ${s.instruction}${suffix} -- ${(s.distM / 1000).toFixed(2)} KM`]));
+    });
+  },
+  showTurnBanner(text) {
+    $("#nav-turn-banner").classList.remove("hidden");
+    $("#nav-turn-banner").textContent = text;
+  },
+  updateGuidanceBanner() {
+    if (!this.turnByTurn.length) return;
+    const next = this.turnByTurn[this.routeProgressIdx] || this.turnByTurn[this.turnByTurn.length - 1];
+    const suffix = next.name && next.name !== "UNNAMED ROAD" ? ` onto ${next.name}` : "";
+    this.showTurnBanner(`NEXT: ${next.instruction}${suffix} -- ${(next.distM / 1000).toFixed(2)} KM`);
+  },
+  updateProgress(lat, lon) {
+    if (!this.routeCoords || !this.routeCoords.length) return;
+    let bestIdx = 0, bestD = Infinity;
+    for (let i = 0; i < this.routeCoords.length; i++) {
+      const d = haversineM([lon, lat], this.routeCoords[i]);
+      if (d < bestD) { bestD = d; bestIdx = i; }
+    }
+    let idx = this.turnByTurn.findIndex(s => bestIdx >= s.startIdx && bestIdx < s.endIdx);
+    if (idx === -1) idx = this.turnByTurn.length - 1;
+    this.routeProgressIdx = idx;
+    this.updateGuidanceBanner();
+  },
+  clearRoute() {
+    this.destLngLat = null; this.routeCoords = null; this.routeEdges = null; this.turnByTurn = [];
+    if (this.destMarker) { this.destMarker.remove(); this.destMarker = null; }
+    if (this.map && this.map.getLayer && this.map.getLayer("route-line")) {
+      this.map.removeLayer("route-line");
+      this.map.removeSource("route");
+    }
+    $("#nav-route-list").classList.add("hidden");
+    $("#nav-turn-banner").classList.add("hidden");
+    $("#nav-clear-route-btn").classList.add("hidden");
+  },
+  drawRadar() {
+    const canvas = $("#nav-radar");
+    if (!canvas || canvas._drawing) return;
+    canvas._drawing = true;
+    const ctx = canvas.getContext("2d");
+    let sweep = 0;
+    setInterval(() => {
+      const w = canvas.width, h = canvas.height, cx = w / 2, cy = h / 2, r = w / 2 - 4;
+      ctx.clearRect(0, 0, w, h);
+      ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue("--line");
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(cx, cy, r * 0.66, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(cx, cy, r * 0.33, 0, Math.PI * 2); ctx.stroke();
+      sweep += 0.06;
+      ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue("--pri");
+      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(sweep) * r, cy + Math.sin(sweep) * r); ctx.stroke();
+    }, 60);
+  },
+};
+
+/* ============================================================================
+ * WI-FI -- modal with real scan results (on-device) or a manual save form
+ * (standalone/demo), so choosing YES in setup actually leads somewhere.
+ * ========================================================================== */
+const Wifi = {
+  open() {
+    Modal.open("WI-FI", (body) => {
+      if (Net.connected) {
+        body.appendChild(el("div", { class: "dim", id: "wifi-scan-status" }, ["SCANNING..."]));
+        Net.send({ type: "wifi.scan" });
+      } else {
+        body.appendChild(el("div", { class: "dim" }, [
+          "PREVIEW MODE -- WI-FI RADIO CONTROL RUNS ON THE DEVICE. SAVE CREDENTIALS BELOW AND THEY'LL BE OFFERED FIRST WHEN THIS RUNS ON THE PI.",
+        ]));
+      }
+      this.renderManualForm(body);
+    });
+  },
+  renderManualForm(body) {
+    const saved = LS.get("wifi_last", null);
+    const ssidInput = el("input", { type: "text", "data-focus": "", placeholder: "SSID", id: "wifi-ssid-input" });
+    const pskInput = el("input", { type: "password", "data-focus": "", placeholder: "PASSWORD", id: "wifi-psk-input" });
+    if (saved) ssidInput.value = saved.ssid;
+    const status = el("div", { class: "dim", id: "wifi-connect-status" }, [""]);
+    const connectBtn = el("button", { "data-focus": "" }, ["[ CONNECT ]"]);
+    connectBtn.addEventListener("click", () => this.connectManual());
+    const closeBtn = el("button", { "data-focus": "" }, ["[ CLOSE ]"]);
+    closeBtn.addEventListener("click", () => Modal.close());
+    body.appendChild(el("div", { style: "margin-top:12px;" }, [
+      el("div", {}, ["SSID"]), ssidInput,
+      el("div", {}, ["PASSWORD"]), pskInput,
+      el("div", { style: "margin-top:8px;" }, [connectBtn, closeBtn]),
+      status,
+    ]));
+  },
+  renderScanResults(networks) {
+    if (!Modal.isOpen()) return;
+    const old = $("#wifi-scan-results");
+    if (old) old.remove();
+    const status = $("#wifi-scan-status");
+    if (status) status.remove();
+    const list = el("div", { id: "wifi-scan-results" });
+    if (networks && networks.length) {
+      networks.forEach(n => {
+        const btn = el("button", { class: "tv-chan-row", "data-focus": "" },
+          [`${n.ssid || "(hidden)"}  (${n.signal || "?"}%)  ${n.security || ""}`]);
+        btn.addEventListener("click", () => this.pick(n.ssid));
+        list.appendChild(btn);
+      });
+    } else {
+      list.appendChild(el("div", { class: "dim" }, ["NO NETWORKS FOUND -- CHECK ANTENNA OR ENTER ONE MANUALLY BELOW"]));
+    }
+    $("#modal-body").insertBefore(list, $("#modal-body").firstChild);
+  },
+  pick(ssid) {
+    $("#wifi-ssid-input").value = ssid;
+    $("#wifi-psk-input").focus();
+  },
+  connectManual() {
+    const ssid = $("#wifi-ssid-input").value.trim();
+    const psk = $("#wifi-psk-input").value;
+    const status = $("#wifi-connect-status");
+    if (!ssid) { status.textContent = "ENTER AN SSID"; return; }
+    LS.set("wifi_last", { ssid, psk });
+    if (Net.connected) {
+      Net.send({ type: "wifi.join", ssid, psk });
+      status.textContent = `CONNECTING TO ${ssid}...`;
+    } else {
+      status.textContent = `SAVED "${ssid}" -- WILL BE OFFERED FIRST WHEN RUN ON THE PI.`;
+    }
+  },
+};
+
+/* ============================================================================
+ * SETTINGS TAB
+ * ========================================================================== */
+function buildSettings() {
+  const swatches = $("#theme-swatches");
+  swatches.innerHTML = "";
+  THEMES.forEach(th => {
+    const sw = el("button", { "data-focus": "", title: th.name, onclick: () => Config.set("theme", th.id) }, [""]);
+    sw.classList.add("theme-swatch");
+    sw.style.background = "var(--pri)";
+    sw.setAttribute("data-theme-preview", th.id);
+    swatches.appendChild(sw);
+  });
+  $("#src-auto-btn").addEventListener("click", () => setSourceMode("AUTO"));
+  $("#src-demo-btn").addEventListener("click", () => setSourceMode("DEMO"));
+  $("#wifi-scan-btn").addEventListener("click", () => Wifi.open());
+  $("#dashcam-toggle-btn").addEventListener("click", () => {
+    const on = $("#dashcam-toggle-btn").textContent === "OFF";
+    Config.set("dashcam", on);
+    $("#dashcam-toggle-btn").textContent = on ? "ON" : "OFF";
+    Net.send({ type: "dashcam.set", on });
+  });
+  $("#update-check-btn").addEventListener("click", () => {
+    if (Net.connected) Net.send({ type: "update.check" });
+    else $("#update-result").textContent = "OFFLINE DEMO -- UPDATES REQUIRE DEVICE";
+  });
+  $("#clock-set-btn").addEventListener("click", () => {
+    const val = $("#clock-set-input").value; // "YYYY-MM-DDTHH:MM" from datetime-local
+    if (!val) { $("#clock-set-result").textContent = "PICK A DATE/TIME FIRST"; return; }
+    if (!Net.connected) { $("#clock-set-result").textContent = "REQUIRES DEVICE -- CAN'T CHANGE THE BROWSER CLOCK"; return; }
+    Net.send({ type: "clock.set", iso: val.replace("T", " ") + ":00" });
+    $("#clock-set-result").textContent = "SETTING...";
+  });
+  $("#dashcam-toggle-btn").textContent = Config.data.dashcam ? "ON" : "OFF";
+  updateSourceButtons();
+}
+function srcModeLabel(mode) {
+  // Internal value stays "DEMO" (backend + saved configs keep working);
+  // the operator-facing name is SHOWCASE -- a display mode for showing the
+  // unit off, not a separate "demo build".
+  return mode === "DEMO" ? "SHOWCASE" : (mode || "AUTO");
+}
+function setSourceMode(mode) {
+  Config.set("source_mode", mode);
+  $("#src-label").textContent = srcModeLabel(mode);
+  updateSourceButtons();
+}
+function updateSourceButtons() {
+  $("#src-auto-btn").classList.toggle("alarm", false);
+  $("#src-auto-btn").style.background = Config.data.source_mode === "AUTO" ? "var(--dim)" : "";
+  $("#src-demo-btn").style.background = Config.data.source_mode === "DEMO" ? "var(--dim)" : "";
+}
+function renderAbout(info) {
+  LastInfo.data = info;
+  const box = $("#about-body");
+  box.innerHTML = "";
+  box.appendChild(el("div", {}, [
+    `GOST/PERIMETR OS v${info.version || "?"}  //  HOST: ${info.hostname || "?"}` +
+    (info.uptime_sec != null ? `  //  UPTIME: ${Math.floor(info.uptime_sec / 60)}m` : ""),
+  ]));
+  const op = LS.get("operator", null);
+  if (op) {
+    const pwSpan = el("span", {}, ["********"]);
+    const toggle = el("button", { "data-focus": "" }, ["[ SHOW/HIDE PASSWORD ]"]);
+    toggle.addEventListener("click", () => {
+      pwSpan.textContent = pwSpan.textContent === "********" ? op.password : "********";
+    });
+    box.appendChild(el("div", { style: "margin-top:8px;" }, [
+      `OPERATOR: ${op.username}  //  PASSWORD: `, pwSpan, " ", toggle,
+    ]));
+  }
+}
+
+/* ============================================================================
+ * CLOCK
+ * ========================================================================== */
+setInterval(() => {
+  const d = new Date();
+  const s = `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+  $("#clock").textContent = s;
+  const cur = $("#clock-current");
+  if (cur) cur.textContent = `CURRENT: ${d.toDateString()} ${s}`;
+}, 1000);
+
+/* ============================================================================
+ * BOOTSTRAP
+ * ========================================================================== */
+document.addEventListener("DOMContentLoaded", () => {
+  applyTheme(Config.data.theme || "gost");
+  buildTabbar();
+  buildHome();
+  buildSettings();
+  initMusic();
+  $("#nav-map-mode-btn").addEventListener("click", () => Nav.toggleMapMode());
+  $("#nav-set-dest-btn").addEventListener("click", () => Nav.toggleDestMode());
+  $("#nav-clear-route-btn").addEventListener("click", () => Nav.clearRoute());
+  renderTvChannelList();
+  renderGuideChannelList();
+  Net.connect();
+
+  if (!Config.data.setup_done) {
+    showScreen("wizard");
+    Wizard.start();
+  } else {
+    Boot.play(() => { showScreen("shell"); setTab("home"); });
+  }
+});
+</script>
+</body>
+</html>

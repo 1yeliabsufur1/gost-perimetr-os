@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Sets the operator's system (and therefore SSH) password. Reads exactly one
+# line from stdin -- the backend pipes it in over `sudo gost-setpass`, never
+# as a command-line argument (which would leak into `ps`/shell history).
+# Installed to /usr/local/sbin/gost-setpass; whitelisted in /etc/sudoers.d/gost
+# for NOPASSWD execution by the operator user only, on this exact path.
+set -euo pipefail
+
+read -r NEWPASS
+
+if [ -z "$NEWPASS" ] || [ "${#NEWPASS}" -lt 4 ]; then
+  echo "gost-setpass: password must be at least 4 characters" >&2
+  exit 1
+fi
+
+GOST_USER="$(cat /etc/gost-user 2>/dev/null || true)"
+if [ -z "$GOST_USER" ]; then
+  echo "gost-setpass: /etc/gost-user not found (install.sh should have written it)" >&2
+  exit 1
+fi
+
+echo "${GOST_USER}:${NEWPASS}" | chpasswd
