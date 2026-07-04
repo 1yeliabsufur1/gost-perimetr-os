@@ -829,6 +829,10 @@ class GPSReader:
 
 
 class Dashcam:
+    """Rolling-buffer recorder: 24 x 5-minute segments (~2h loop) that wrap
+    and overwrite the oldest -- an unbounded single file would eventually
+    fill the SD card and take the whole OS down with it."""
+
     def __init__(self):
         self.proc = None
 
@@ -836,15 +840,22 @@ class Dashcam:
         if on and not self.proc:
             out_dir = STATE_DIR / "dashcam"
             out_dir.mkdir(exist_ok=True)
-            fname = out_dir / f"{int(time.time())}.h264"
             try:
-                self.proc = await asyncio.create_subprocess_exec("rpicam-vid", "-t", "0", "-o", str(fname))
+                self.proc = await asyncio.create_subprocess_exec(
+                    "rpicam-vid", "-t", "0",
+                    "--segment", "300000",   # 5-minute segments
+                    "--wrap", "24",          # reuse seg 01..24 -> ~2h rolling loop
+                    "-o", str(out_dir / "seg%02d.h264"))
             except FileNotFoundError:
                 log("rpicam-vid not available, dashcam disabled")
                 self.proc = None
         elif not on and self.proc:
             if self.proc.returncode is None:
                 self.proc.terminate()
+                try:
+                    await asyncio.wait_for(self.proc.wait(), timeout=3)
+                except asyncio.TimeoutError:
+                    self.proc.kill()
             self.proc = None
 
 

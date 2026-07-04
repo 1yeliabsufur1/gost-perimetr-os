@@ -68,7 +68,10 @@ jobs:
           # Without a country set, rfkill blocks Wi-Fi until 'raspi-config'
           # or a wpa_supplicant country= is set manually -- set it in the
           # kernel cmdline instead so Wi-Fi works out of the box.
-          sudo sed -i 's/$/ cfg80211.ieee80211_regdom=US/' boot/cmdline.txt
+          # consoleblank=0: the kernel must never blank the console -- if the
+          # kiosk ever dies, the operator sees our status messages, not a
+          # black screen that looks like dead hardware.
+          sudo sed -i 's/$/ cfg80211.ieee80211_regdom=US consoleblank=0/' boot/cmdline.txt
           if ! grep -q '^dtparam=spi=on' boot/config.txt; then
             echo 'dtparam=spi=on' | sudo tee -a boot/config.txt >/dev/null
           fi
