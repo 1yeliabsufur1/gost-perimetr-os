@@ -299,9 +299,16 @@ def resolve_channel(chan, channels, commercials, guide3, dur_cache, now=None):
     sec_of_minute = dt.second
 
     ch = channels.get(chan)
-    schedule = (guide3.get(chan) or {}).get(weekday, [])
+    days = guide3.get(chan) or {}
+    schedule = days.get(weekday, []) if isinstance(days, dict) else []
+    # A channel with ANY programming (on any day) is a curated station: days
+    # without blocks are gaps -> commercials/static, NEVER the 24/7 rotation.
+    # The rotation is only for dump-folder channels never touched in GUIDE.
+    has_any_programming = isinstance(days, dict) and any(
+        days.get(d) for d in WEEKDAYS
+    )
 
-    if schedule:
+    if schedule or has_any_programming:
         for b in schedule:
             s, d, f = b["s"], b["d"], b["f"]
             if s <= minute_of_day < s + d:
@@ -319,9 +326,11 @@ def resolve_channel(chan, channels, commercials, guide3, dur_cache, now=None):
             spot_dur = dur_cache.get(spot) or 30
             length = min(spot_dur, gap_secs)
             return {"kind": "commercial", "file": str(spot), "offset": 0, "length": length}
-        return {"kind": "static", "reason": "gap_no_commercials"}
+        # `until` = seconds to the next scheduled block (or midnight) so the
+        # player can re-resolve exactly on the boundary.
+        return {"kind": "static", "reason": "gap_no_commercials", "until": gap_secs}
 
-    # unscheduled channel: continuous pseudo-broadcast, seeded by epoch time
+    # never-programmed channel: continuous pseudo-broadcast, seeded by epoch
     if ch and ch["files"]:
         files = ch["files"]
         durations = [dur_cache.get(f) or 300 for f in files]
@@ -351,10 +360,39 @@ class TVPlayer:
         self.mode = "off"  # off / playing / static / app
         self.paused = False
         self.last_resolution = None
+        self.boundary_handle = None
+
+    def _cancel_boundary(self):
+        if self.boundary_handle is not None:
+            self.boundary_handle.cancel()
+            self.boundary_handle = None
+
+    def _schedule_boundary(self, res):
+        """Minute-accurate handoff: re-resolve exactly when this show/
+        commercial/gap ends, so the next block starts on its scheduled
+        minute instead of up to 30s late on the coarse supervisor poll
+        (which stays as a safety net)."""
+        delay = None
+        if res["kind"] == "show":
+            delay = res.get("remaining")
+        elif res["kind"] == "commercial":
+            delay = res.get("length")
+        else:
+            delay = res.get("until")
+        if delay is None or delay <= 0 or delay > 24 * 3600:
+            return
+        loop = asyncio.get_event_loop()
+
+        def _fire():
+            self.boundary_handle = None
+            asyncio.ensure_future(self._resolve_and_play())
+
+        self.boundary_handle = loop.call_later(delay + 0.5, _fire)
 
     async def tune(self, chan):
         self.current_chan = chan
         if chan == YOUTUBE_CHANNEL:
+            self._cancel_boundary()
             await self.stop_proc()
             self.mode = "app"
             await self.state.launch_app("https://www.youtube.com/tv")
@@ -362,6 +400,7 @@ class TVPlayer:
         await self._resolve_and_play()
 
     async def _resolve_and_play(self):
+        self._cancel_boundary()
         await self.stop_proc()
         if self.current_chan is None:
             self.mode = "off"
@@ -372,6 +411,7 @@ class TVPlayer:
             self.state.commercials, self.state.config.get("guide3", {}), self.state.dur_cache,
         )
         self.last_resolution = res
+        self._schedule_boundary(res)
         if res["kind"] == "static":
             self.mode = "static"
             return
@@ -425,6 +465,7 @@ class TVPlayer:
         await self._resolve_and_play()
 
     async def exit(self):
+        self._cancel_boundary()
         await self.stop_proc()
         self.current_chan = None
         self.mode = "off"

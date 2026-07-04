@@ -40,12 +40,22 @@ keyboard. Runs fully offline after a one-time first-boot install.
 
 ## First boot
 
-On first boot, `gost-firstboot.service` runs `install.sh` once: it installs
-apt packages, builds the Python venv, enables the systemd services, lays
-down the media folder skeleton, marks itself installed, disables itself, and
-reboots. From then on the Pi boots straight into the kiosk. This first pass
-needs internet access exactly once (dependencies come from apt/pip).
+**What to expect: the first boot is an INSTALL, not the dashboard.** You'll
+see a banner and scrolling install progress on screen for ~10 minutes (with
+internet connected), then the Pi reboots itself straight into the kiosk.
+Don't power off and don't try to log in while it runs.
 
+Behind the scenes, `gost-firstboot.service` runs `install.sh` once: it waits
+for network **and for the clock to NTP-sync** (the Pi has no battery clock;
+without this wait, apt rejects repository signatures as "not live until
+<future date>" and the install dies), installs apt packages, builds the
+Python venv, enables the systemd services, lays down the media folder
+skeleton (all channels 03–82 plus music/podcast genre folders), marks itself
+installed, disables itself, and reboots.
+
+- **Default login:** `gost` / `gost` (pre-seeded — you'll never see Pi OS's
+  "create a user" prompt). The kiosk's setup wizard replaces this password
+  on first run; change it there, not by hand.
 - **Ethernet:** fully hands-off, no action needed.
 - **Wi-Fi only:** SSH in during the first boot window (or attach a keyboard)
   and run:
@@ -59,6 +69,28 @@ After the reboot that ends `install.sh`, you land in the GOST/PERIMETR OS
 first-run setup wizard: create an operator password (this becomes your
 system/SSH password), then choose whether to connect to the internet now.
 Every boot after that goes straight to the boot animation and HOME.
+
+### If you end up at a login prompt instead of the dashboard
+
+That means the first-boot install didn't finish (usually: no internet, or a
+badly skewed clock on an older image). It is always recoverable without
+re-flashing:
+
+1. Log in (`gost` / `gost`, or whatever user you created).
+2. Check what happened: `systemctl status gost-firstboot` and
+   `journalctl -u gost-firstboot -e`.
+3. Get network up if needed (`sudo nmcli dev wifi connect ...`), then just
+   re-run the installer — it's idempotent and picks up where it left off:
+   ```
+   sudo /opt/gost-src/install.sh
+   ```
+   It reboots into the kiosk when it finishes.
+
+**Do not install X11/Xorg/LightDM/openbox "to fix the GUI".** There is no X
+in this OS and `startx` will never exist — the interface is Wayland
+(`cage` + Chromium), installed and started by the steps above. Bolting a
+desktop stack on top just wastes space and fights the kiosk service for the
+display.
 
 ## Getting media onto the unit
 

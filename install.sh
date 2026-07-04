@@ -58,6 +58,20 @@ for _ in $(seq 1 60); do
   sleep 5
 done
 
+# The Pi has no RTC: on first boot the clock can be hours/days behind, and
+# apt's sqv signature verification then fails with "signature not live
+# until <future time>" and the whole install dies. Wait for NTP sync (up to
+# 3 minutes) before touching apt; proceed anyway after the timeout since a
+# roughly-right clock usually still verifies.
+log "waiting for clock sync (NTP)..."
+for _ in $(seq 1 36); do
+  if [ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" = "yes" ]; then
+    log "clock is synced: $(date)"
+    break
+  fi
+  sleep 5
+done
+
 apt-get update
 
 apt-get install -y \
@@ -100,6 +114,13 @@ if [ ! -d "$GOST_HOME/media" ]; then
   mkdir -p "$GOST_HOME/media/TV/COMMERCIALS" "$GOST_HOME/media/MUSIC" "$GOST_HOME/media/PODCASTS"
   [ -d "$SRC_DIR/media" ] && cp -r "$SRC_DIR"/media/. "$GOST_HOME/media/" 2>/dev/null || true
 fi
+# Every channel 03-82 gets its own folder so content never has to share:
+# drop files in, rename the folder ("07 CARTOONS") to name the channel.
+for n in $(seq -w 3 82); do
+  ls -d "$GOST_HOME/media/TV/$n "* >/dev/null 2>&1 || mkdir -p "$GOST_HOME/media/TV/$n CH"
+done
+mkdir -p "$GOST_HOME/media/MUSIC"/{ROCK,POP,RAP,COUNTRY,JAZZ,METAL,ELECTRONIC,CLASSICAL} \
+         "$GOST_HOME/media/PODCASTS"/{NEWS,COMEDY,"TRUE CRIME",TECH,SPORTS,HISTORY}
 mkdir -p "$GOST_HOME/maps" "$GOST_HOME/state"
 
 chown -R "$GOST_USER":"$GOST_USER" "$GOST_HOME"

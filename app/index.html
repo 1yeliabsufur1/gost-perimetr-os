@@ -30,6 +30,16 @@ button, input, select {
   font-family: inherit; font-size: inherit; color: var(--pri); background: var(--bg);
   border: 1px solid var(--line); padding: 6px 10px;
 }
+
+/* Square, amber, terminal-style scrollbars -- the OS default rounded grey
+   bar broke the IBM-CRT look and channel rows visually merged into it. */
+* { scrollbar-width: thin; scrollbar-color: var(--dim) var(--bg); } /* firefox */
+::-webkit-scrollbar { width: 12px; height: 12px; }
+::-webkit-scrollbar-track { background: var(--bg); border-left: 1px solid var(--line); }
+::-webkit-scrollbar-thumb { background: var(--dim); border: 1px solid var(--pri); border-radius: 0; }
+::-webkit-scrollbar-thumb:hover { background: var(--pri); }
+::-webkit-scrollbar-corner { background: var(--bg); }
+#tv-channels, #guide-channels, #guide-main, #music-genres, #music-tracks { padding-right: 8px; }
 button { cursor: pointer; }
 button:hover { background: var(--dim); }
 a { color: var(--pri); }
@@ -502,9 +512,16 @@ function resolveChannel(chan, channels, commercials, guide3, nowMs) {
   const minuteOfDay = dt.getHours() * 60 + dt.getMinutes();
   const secOfMinute = dt.getSeconds();
   const ch = channels[chan];
-  const schedule = ((guide3[chan] || {})[weekday]) || [];
+  const days = guide3[chan] || {};
+  const schedule = days[weekday] || [];
+  // A channel with ANY programming (on any day) is a curated station: days
+  // without blocks are gaps -> commercials/static, NEVER the 24/7 rotation.
+  // (Bug this fixes: a block placed on Sunday made Saturday play the same
+  // file at epoch-seeded offsets, which looked like random garbage times.)
+  // The rotation is only for dump-folder channels never touched in GUIDE.
+  const hasAnyProgramming = WEEKDAYS.some(d => (days[d] || []).length > 0);
 
-  if (schedule.length) {
+  if (schedule.length || hasAnyProgramming) {
     for (const b of schedule) {
       if (b.s <= minuteOfDay && minuteOfDay < b.s + b.d) {
         const offset = (minuteOfDay - b.s) * 60 + secOfMinute;
@@ -521,7 +538,9 @@ function resolveChannel(chan, channels, commercials, guide3, nowMs) {
       const dur = spot.duration || 30;
       return { kind: "commercial", file: spot, offset: 0, length: Math.min(dur, gapSecs) };
     }
-    return { kind: "static", reason: "gap_no_commercials" };
+    // `until` = seconds to the next scheduled block (or midnight) so the
+    // player can re-resolve exactly on the boundary, not on a coarse poll.
+    return { kind: "static", reason: "gap_no_commercials", until: gapSecs };
   }
 
   if (ch && ch.files && ch.files.length) {
@@ -718,6 +737,18 @@ const Modal = {
   },
   isOpen() { return !$("#modal").classList.contains("hidden"); },
 };
+
+/** YES/NO confirmation dialog. NO (or universal back / Escape) does nothing. */
+function confirmModal(title, message, onYes) {
+  Modal.open(title, (body) => {
+    body.appendChild(el("div", { style: "margin-bottom:12px;" }, [message]));
+    const yes = el("button", { "data-focus": "" }, ["[ YES ]"]);
+    yes.addEventListener("click", () => { Modal.close(); onYes(); });
+    const no = el("button", { "data-focus": "" }, ["[ NO ]"]);
+    no.addEventListener("click", () => Modal.close());
+    body.appendChild(el("div", {}, [yes, " ", no]));
+  });
+}
 
 let holdTimer = null;
 document.addEventListener("keydown", (e) => {
@@ -1019,7 +1050,7 @@ function fixedChannelDial() {
 }
 
 const TV = {
-  watching: false, chan: null, mode: "off", reresolveTimer: null,
+  watching: false, chan: null, mode: "off", reresolveTimer: null, boundaryTimer: null,
   demoFiles: fixedChannelDial(), commercials: [],
 
   channels() {
@@ -1063,6 +1094,7 @@ const TV = {
   exit() {
     this.watching = false; this.chan = null;
     if (this.reresolveTimer) { clearInterval(this.reresolveTimer); this.reresolveTimer = null; }
+    if (this.boundaryTimer) { clearTimeout(this.boundaryTimer); this.boundaryTimer = null; }
     stopStaticAnim();
     if (Net.connected) { Net.send({ type: "tv.exit" }); return; }
     $("#tv-video").classList.add("hidden"); $("#tv-video").pause();
@@ -1071,7 +1103,20 @@ const TV = {
     $("#tv-overlay-text").textContent = "";
   },
   _playLocal(forced) {
+    if (this.boundaryTimer) { clearTimeout(this.boundaryTimer); this.boundaryTimer = null; }
     const res = resolveChannel(this.chan, this.channels(), this.commercials, Config.data.guide3 || {});
+    // Minute-accurate handoff: re-resolve exactly when this show/commercial/
+    // gap ends, so the next block starts on its scheduled minute instead of
+    // up to 30s late on the coarse poll (which stays as a safety net).
+    const boundarySecs = res.kind === "show" ? res.remaining
+      : res.kind === "commercial" ? res.length
+      : res.until;
+    if (boundarySecs != null && boundarySecs > 0 && boundarySecs < 24 * 3600) {
+      this.boundaryTimer = setTimeout(() => {
+        this.boundaryTimer = null;
+        if (this.watching) this._playLocal(true);
+      }, boundarySecs * 1000 + 400);
+    }
     $("#tv-idle").classList.add("hidden");
     const video = $("#tv-video"), canvas = $("#tv-static-canvas");
     if (res.kind === "show" || res.kind === "commercial") {
@@ -1343,14 +1388,25 @@ function renderGuideMain() {
       const cell = el("button", {
         class: "slot occupied", style: `grid-column: span ${span};`, title: `${hh}:${mm} -- ${block.f}`,
       }, [`${hh}:${mm}\n${block.f}`]);
-      cell.addEventListener("click", () => removeGuideBlock(Guide.selectedChan, Guide.selectedDay, block.s));
+      cell.addEventListener("click", () => {
+        // Confirm before removing -- an accidental click must never silently
+        // delete a scheduled show. NO / Escape leaves the schedule untouched.
+        confirmModal("REMOVE FROM TIMETABLE",
+          `REMOVE "${block.f}" FROM ${Guide.selectedDay.toUpperCase()} ${hh}:${mm}?`,
+          () => removeGuideBlock(Guide.selectedChan, Guide.selectedDay, block.s));
+      });
       grid.appendChild(cell);
       slot += span;
       continue;
     }
     const cell = el("button", { class: "slot" + (!avail[slot] ? " blocked" : ""), title: `${hh}:${mm}` }, [`${hh}:${mm}`]);
     if (Guide.pendingFile && avail[slot]) {
-      cell.addEventListener("click", () => placeGuideBlock(Guide.selectedChan, Guide.selectedDay, start, Guide.pendingFile));
+      cell.addEventListener("click", () => {
+        const f = Guide.pendingFile;
+        confirmModal("SAVE TO TIMETABLE",
+          `SCHEDULE "${f.name}" AT ${Guide.selectedDay.toUpperCase()} ${hh}:${mm}?`,
+          () => placeGuideBlock(Guide.selectedChan, Guide.selectedDay, start, f));
+      });
     } else {
       cell.disabled = true;
     }

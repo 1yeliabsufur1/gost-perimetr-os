@@ -61,7 +61,7 @@ jobs:
           sudo ln -sf /etc/systemd/system/gost-firstboot.service \
             root/etc/systemd/system/multi-user.target.wants/gost-firstboot.service
 
-      - name: Headless rescue, Wi-Fi regdom, SPI enable
+      - name: Headless rescue, Wi-Fi regdom, SPI enable, default user
         run: |
           # boot/ssh: headless rescue access.
           sudo touch boot/ssh
@@ -72,6 +72,10 @@ jobs:
           if ! grep -q '^dtparam=spi=on' boot/config.txt; then
             echo 'dtparam=spi=on' | sudo tee -a boot/config.txt >/dev/null
           fi
+          # Pre-seed the operator account (gost/gost) so Pi OS's first-boot
+          # "create a user" console prompt never appears -- the kiosk's own
+          # setup wizard changes the password later via gost-setpass.
+          echo "gost:$(openssl passwd -6 gost)" | sudo tee boot/userconf.txt >/dev/null
 
       - name: Unmount
         if: always()

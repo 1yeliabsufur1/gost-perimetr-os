@@ -6,10 +6,13 @@ ConditionPathExists=!/opt/gost/.installed
 
 [Service]
 Type=oneshot
+ExecStartPre=/bin/sh -c 'echo "\n*** GOST/PERIMETR OS FIRST-BOOT INSTALL ***\n*** Takes ~10 minutes with internet connected -- reboots into the dashboard when done. ***\n*** Do NOT power off. Default login if you need a shell: gost / gost ***\n" > /dev/tty1 || true'
 ExecStart=/opt/gost-src/install.sh
 TimeoutStartSec=0
-StandardOutput=journal
-StandardError=journal
+# journal+console so install progress is visible on the attached screen
+# instead of leaving the operator staring at a bare login prompt.
+StandardOutput=journal+console
+StandardError=journal+console
 
 [Install]
 WantedBy=multi-user.target
