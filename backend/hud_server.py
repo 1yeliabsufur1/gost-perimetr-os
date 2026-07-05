@@ -516,22 +516,37 @@ OBD_ATTEMPTS = [
 
 
 def _reset_adapter(port, baud):
-    """Raw ATZ + input-buffer flush to clear any CAN stream the ELM327 is
-    still emitting from a prior session (that stale data desyncs python-obd's
-    init handshake and makes every connect fail). Best-effort; never raises."""
+    """Fully drain + reset the ELM327 before python-obd touches it. The
+    adapter keeps emitting CAN frames from the prior session; that stale data
+    desyncs python-obd's ATE0/ATH1 init and makes every connect fail. We send
+    ATZ, then actively DRAIN the port until it goes quiet (not just a single
+    buffer flush), so python-obd starts from silence. Best-effort; never
+    raises."""
     try:
         import serial
-        s = serial.Serial(port, baud, timeout=1)
+        s = serial.Serial(port, baud, timeout=0.4)
         try:
             s.write(b"\r")
-            time.sleep(0.3)
+            time.sleep(0.2)
             s.reset_input_buffer()
-            s.write(b"ATZ\r")
-            time.sleep(1.2)
+            s.write(b"ATZ\r")          # full adapter reset
+            time.sleep(1.5)            # ATZ takes ~1s to complete
+            # Drain everything the reset + any stale frames produce, until the
+            # port stays silent for a full read cycle.
+            deadline = time.time() + 1.5
+            while time.time() < deadline:
+                n = s.in_waiting
+                if n:
+                    s.read(n)
+                    time.sleep(0.1)
+                else:
+                    time.sleep(0.15)
+                    if not s.in_waiting:
+                        break
             s.reset_input_buffer()
         finally:
             s.close()
-        time.sleep(0.3)
+        time.sleep(0.4)               # let the OS release the port cleanly
     except Exception as e:
         log("OBD: pre-reset skipped:", e)
 
@@ -630,17 +645,32 @@ class Telemetry:
                 except Exception:
                     state = ""
                 last_state = state or last_state
-                # Reject the false positive: protocol 9 (250k) reports "Car
-                # Connected" but 0100 returns CAN ERROR, so RPM isn't in the
-                # supported set. A REAL link on this truck exposes RPM (010C).
+                # Acceptance = a FORCED RPM query returns a real value. This
+                # is the only reliable test on this truck: 0100 (the support
+                # list) can return CAN ERROR on the wrong protocol, so trusting
+                # it would both false-positive (proto 9) and false-negative
+                # (empty list -> we'd read nothing). A live 010C answer proves
+                # both the protocol AND that data actually flows.
                 try:
                     linked = conn.is_connected()
-                    sup = set(c.name for c in conn.supported_commands)
-                    real = linked and ("RPM" in sup or len(sup) > 12)
                 except Exception:
-                    linked, sup, real = False, set(), False
+                    linked = False
+                rpm_val = None
+                if linked:
+                    try:
+                        r = await loop.run_in_executor(
+                            None, lambda: conn.query(obd.commands.RPM, force=True))
+                        if r is not None and not r.is_null():
+                            rpm_val = r.value
+                    except Exception:
+                        pass
+                try:
+                    sup = set(c.name for c in conn.supported_commands)
+                except Exception:
+                    sup = set()
+                real = linked and (rpm_val is not None)
                 log(f"OBD: {port}@{baud} proto {label} -> status='{state}' "
-                    f"linked={linked} pids={len(sup)} real={real}")
+                    f"linked={linked} RPM={rpm_val} pids={len(sup)} real={real}")
                 if real:
                     self.conn = conn
                     self.connected = True
@@ -651,9 +681,8 @@ class Telemetry:
                         proto_name = conn.protocol_name() or ""
                     except Exception:
                         pass
-                    self.obd_status = f"LIVE {port} @ {baud} [{proto_name}, {len(sup)} PIDs]"
+                    self.obd_status = f"LIVE {port} @ {baud} [{proto_name}, RPM={rpm_val}]"
                     log("OBD: CONNECTED --", self.obd_status)
-                    log("OBD: supported PIDs:", ", ".join(sorted(sup)))
                     return True
                 try:
                     conn.close()
@@ -680,7 +709,13 @@ class Telemetry:
         if cmd is None or self.conn is None:
             return None
         try:
-            r = await asyncio.get_event_loop().run_in_executor(None, self.conn.query, cmd)
+            # force=True: send the PID even if python-obd's supported-list
+            # (built from 0100) doesn't include it. On this truck 0100 can
+            # return CAN ERROR while the individual PIDs (010C RPM, 010D
+            # speed) answer fine -- so trusting the support-list would read
+            # NOTHING. Forcing the query is what actually gets live data.
+            r = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: self.conn.query(cmd, force=True))
             if r is None or r.is_null():
                 return None
             return r.value
