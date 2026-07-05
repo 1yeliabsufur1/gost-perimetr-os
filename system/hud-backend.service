@@ -16,9 +16,12 @@ Environment=GOST_APP=/opt/gost/app
 Environment=GOST_MEDIA=/opt/gost/media
 Environment=GOST_MAPS=/opt/gost/maps
 Environment=GOST_STATE=/opt/gost/state
-ExecStart=/opt/gost/venv/bin/python3 /opt/gost/backend/hud_server.py
+ExecStart=/opt/gost/venv/bin/python3 -u /opt/gost/backend/hud_server.py
 Restart=always
-RestartSec=2
+# 5s pacing so a crash can't tight-loop; combined with StartLimitIntervalSec=0
+# it retries forever but never hammers. The backend also logs a full
+# traceback on any fatal exception before exiting, so the journal shows why.
+RestartSec=5
 StandardOutput=journal
 StandardError=journal
 

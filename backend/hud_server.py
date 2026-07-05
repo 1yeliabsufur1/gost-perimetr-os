@@ -498,6 +498,9 @@ FAST_PIDS = ["SPEED", "RPM", "INTAKE_PRESSURE", "MAF"]
 SLOW_PIDS = ["FUEL_LEVEL", "COOLANT_TEMP", "CONTROL_MODULE_VOLTAGE", "OIL_TEMP",
              "BAROMETRIC_PRESSURE", "HYBRID_BATTERY_REMAINING"]
 
+# Baud rates to try, most-likely first. OBDLink EX defaults to 115200.
+OBD_BAUDS = [115200, 230400, 38400, 9600]
+
 # Engine is considered "running" at/above this RPM. Below it (≈0) on a hybrid
 # means the gas engine has shut off and the truck is on battery. Ford's V6
 # idles ~600-700 RPM, so anything under ~250 is engine-off, not a low idle.
@@ -532,7 +535,9 @@ class Telemetry:
         self.vtype = None
         self.values = {}
         self.derived = {}
-        self.connected = False
+        self.connected = False   # showing ANY data (real OR demo fallback)
+        self.live = False        # real OBD data is flowing (drives "LIVE" badge)
+        self.obd_linked = False  # a real adapter connection is open
         self.demo_t0 = time.time()
         self.obd_status = "idle"
         self.obd_port = ""
@@ -545,57 +550,73 @@ class Telemetry:
                 self.dtcs = {}
 
     async def connect_obd(self):
+        """Try hard to link a real OBDLink/ELM327 adapter across every likely
+        port and baud rate, with retries. Returns True and sets obd_linked on
+        success. Verbose logging so the journal shows exactly what happened."""
         try:
             import obd
         except ImportError:
             self.obd_status = "python-obd not installed"
             return False
         import glob
-        # ELM327 adapters show up as ttyUSB* (FTDI/CH340) OR ttyACM* (native
-        # USB CDC clones). Try each; fall back to python-obd's own scan.
+        # ELM327 adapters enumerate as ttyUSB* (FTDI/CH340) or ttyACM* (native
+        # USB CDC). OBDLink EX is usually ttyUSB0 at 115200; clones vary.
         ports = sorted(glob.glob("/dev/ttyUSB*") + glob.glob("/dev/ttyACM*"))
-        candidates = ports if ports else [None]
-        for port in candidates:
-            self.obd_status = f"connecting {port or 'auto-scan'}..."
-            self.obd_port = port or ""
-            log("OBD: trying", port or "auto-scan")
-            try:
-                conn = await asyncio.get_event_loop().run_in_executor(
-                    None, lambda p=port: obd.OBD(portstr=p, fast=False, timeout=3)
-                )
-                if conn and conn.is_connected():
-                    self.conn = conn
-                    self.connected = True
-                    proto = ""
-                    nsup = 0
+        if not ports:
+            self.obd_linked = False
+            self.obd_status = "no adapter found (no /dev/ttyUSB* or /dev/ttyACM*)"
+            log("OBD:", self.obd_status)
+            return False
+
+        loop = asyncio.get_event_loop()
+        for attempt in range(1, 4):  # 3 retry rounds
+            for port in ports:
+                for baud in OBD_BAUDS:
+                    self.obd_port = port
+                    self.obd_status = f"connecting {port} @ {baud} (try {attempt}/3)..."
+                    log("OBD:", self.obd_status)
                     try:
-                        proto = conn.protocol_name() or ""
-                        nsup = len(conn.supported_commands)
+                        conn = await loop.run_in_executor(
+                            None,
+                            lambda p=port, b=baud: obd.OBD(
+                                portstr=p, baudrate=b, fast=False, timeout=2),
+                        )
+                    except Exception as e:
+                        log("OBD: error on", port, "@", baud, ":", e)
+                        continue
+                    try:
+                        ok = bool(conn and conn.is_connected())
+                    except Exception:
+                        ok = False
+                    if ok:
+                        self.conn = conn
+                        self.connected = True
+                        self.live = True
+                        self.obd_linked = True
+                        proto, nsup = "", 0
+                        try:
+                            proto = conn.protocol_name() or ""
+                            nsup = len(conn.supported_commands)
+                        except Exception:
+                            pass
+                        self.obd_status = f"LIVE {port} @ {baud} [{proto}, {nsup} PIDs]"
+                        log("OBD: CONNECTED --", self.obd_status)
+                        try:
+                            names = sorted(c.name for c in conn.supported_commands)
+                            log("OBD: supported PIDs:", ", ".join(names))
+                        except Exception:
+                            pass
+                        return True
+                    try:
+                        if conn:
+                            conn.close()
                     except Exception:
                         pass
-                    self.obd_status = f"connected {port or conn.port_name()} [{proto}, {nsup} PIDs]"
-                    log("OBD: connected", self.obd_status)
-                    # One-time dump of what the truck actually answers -- the
-                    # single most useful diagnostic for "connected but no data".
-                    try:
-                        names = sorted(c.name for c in conn.supported_commands)
-                        log("OBD: supported PIDs:", ", ".join(names))
-                    except Exception:
-                        pass
-                    return True
-                # not connected: report the adapter's own status if any
-                st = ""
-                try:
-                    st = str(conn.status()) if conn else ""
-                except Exception:
-                    pass
-                self.obd_status = f"adapter on {port} but no ECU link ({st})"
-                log("OBD: no vehicle link on", port, st)
-            except Exception as e:
-                log("OBD connect error on", port, ":", e)
-        self.connected = False
-        self.obd_status = ("no adapter found (no /dev/ttyUSB* or /dev/ttyACM*)"
-                           if not ports else "adapter found but no vehicle link")
+            await asyncio.sleep(1.0)  # brief pause between retry rounds
+
+        self.obd_linked = False
+        self.obd_status = f"adapter on {ports[0]} but no ECU link after 3 tries"
+        log("OBD:", self.obd_status)
         return False
 
     async def _query(self, pid_name):
@@ -721,23 +742,42 @@ class Telemetry:
     async def poll_loop(self):
         last_slow = 0.0
         last_dtc = 0.0
+        last_connect = 0.0
         dead_cycles = 0
         while True:
             try:
                 mode = self.state.config.get("source_mode", "AUTO")
+
+                # Explicit SHOWCASE mode -- always simulated, never real.
                 if mode == "DEMO":
                     self.demo_tick()
+                    self.live = False
+                    self.obd_linked = False
                     await asyncio.sleep(0.2)
                     continue
-                if not self.connected:
-                    # Leaving DEMO or first run: clear any simulated values.
-                    self.values = {}
-                    self.vtype = None
-                    ok = await self.connect_obd()
-                    if not ok:
-                        await asyncio.sleep(3)
+
+                # AUTO mode: real OBD data ALWAYS wins. Only when a real link
+                # can't be established do we fall back to SHOWCASE so the
+                # screen stays alive -- and we keep retrying in the background,
+                # switching to real data the instant the adapter links up.
+                if not self.obd_linked:
+                    now = time.time()
+                    if now - last_connect > 6:   # don't hammer the port
+                        last_connect = now
+                        self.values = {}
+                        self.vtype = None
+                        await self.connect_obd()
+                        dead_cycles = 0
+                    if not self.obd_linked:
+                        # SHOWCASE fallback -- clearly flagged as not live.
+                        self.demo_tick()
+                        self.live = False
+                        self.obd_status = "no OBD link -- SHOWCASE fallback (retrying)"
+                        await asyncio.sleep(0.2)
                         continue
-                    dead_cycles = 0
+
+                # --- real adapter is linked: poll the truck ---
+                self.live = True
                 got = await self.poll_fast()
                 now = time.time()
                 if now - last_slow > 2:
@@ -753,7 +793,8 @@ class Telemetry:
                     dead_cycles += 1
                     if dead_cycles > 25:  # ~5s of total silence
                         log("OBD: link went silent, dropping to re-detect")
-                        self.connected = False
+                        self.obd_linked = False
+                        self.live = False
                         try:
                             self.conn.close()
                         except Exception:
@@ -769,13 +810,15 @@ class Telemetry:
                 self.derive()
             except Exception as e:
                 log("telemetry loop error (continuing):", e)
-                self.connected = False
+                self.obd_linked = False
+                self.live = False
             await asyncio.sleep(0.2)
 
     def snapshot(self):
         return {
             "type": "telemetry",
             "connected": self.connected,
+            "live": self.live,   # True => real OBDLink data (drives LIVE badge)
             "source_mode": self.state.config.get("source_mode", "AUTO"),
             "vtype": self.vtype or "unknown",
             "values": self.values,
@@ -1436,6 +1479,7 @@ async def main():
 
 
 if __name__ == "__main__":
+    import traceback
     if websockets is None:
         log("FATAL: 'websockets' package not installed (pip install websockets)")
         sys.exit(1)
@@ -1443,3 +1487,10 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         pass
+    except Exception:
+        # Full traceback to the journal so a startup crash is diagnosable
+        # instead of a silent restart loop. systemd Restart=always with a
+        # paced RestartSec then retries without hammering.
+        log("FATAL: backend crashed with traceback:")
+        traceback.print_exc()
+        sys.exit(1)

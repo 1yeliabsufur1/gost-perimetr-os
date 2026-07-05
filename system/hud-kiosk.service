@@ -3,9 +3,13 @@ Description=GOST/PERIMETR OS kiosk (cage + chromium)
 After=hud-backend.service seatd.service getty@tty1.service systemd-user-sessions.service
 Wants=hud-backend.service seatd.service
 Conflicts=getty@tty1.service
-# Appliance rule: never rate-limit into a permanent 'failed' state -- if
-# cage/chromium crash-loop, keep retrying (with RestartSec pacing) instead
-# of giving the screen back to a login prompt forever.
+# SAFE MODE: if either safe-mode marker exists the kiosk is SKIPPED entirely,
+# so getty@tty1 is never conflicted-out and you boot straight to a console.
+#   From the Pi:        touch /boot/gost_safe_mode && sudo reboot
+#   From a PC (SD card): create an empty file 'gost_safe_mode' on the bootfs
+#                        partition (that mounts at /boot/firmware).
+ConditionPathExists=!/boot/gost_safe_mode
+ConditionPathExists=!/boot/firmware/gost_safe_mode
 StartLimitIntervalSec=0
 
 [Service]
@@ -22,7 +26,10 @@ StandardError=journal
 UtmpIdentifier=tty1
 ExecStart=/opt/gost/system/kiosk-start.sh
 Restart=always
-RestartSec=2
+RestartSec=3
+# kiosk-start.sh exits 42 when its own crash-loop breaker trips; that must NOT
+# be restarted -- it means "give up and leave tty2-6 consoles usable".
+RestartPreventExitStatus=42
 
 [Install]
 # CRITICAL: multi-user.target, NOT graphical.target. Pi OS Lite boots to

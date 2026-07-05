@@ -203,10 +203,36 @@ normally.
 ## Showcase mode
 
 There is no separate "demo build" — the flashed unit always runs the real
-OS. Settings → SOURCE → **SHOWCASE** switches the telemetry source to a
-simulated drive (moving speed/SOC, a sample stored DTC, periodic 12V sag)
-so you can show the interface off indoors; switch back to AUTO and it goes
-right back to waiting for the real OBD-II adapter.
+OS. In **AUTO** mode, real OBD data always wins: the backend hunts for the
+adapter across every serial port and baud rate, and only falls back to a
+simulated drive if no real link can be made (so the screen stays alive) —
+switching to real data the instant the adapter links up. The DRIVE tab shows
+a **● LIVE — OBDLink** banner when it's on the real truck, or **◌ SHOWCASE**
+when simulated, so it's never ambiguous. Settings → SOURCE → **SHOWCASE**
+forces the simulation for showing the unit off indoors.
+
+## Safe mode (break a boot loop) & OBD testing
+
+If the kiosk ever misbehaves, you can always get a console:
+
+- **Force safe mode** — the kiosk is skipped and you boot to a login prompt:
+  - From the Pi: `touch /boot/gost_safe_mode && sudo reboot`
+  - From a PC: put an empty file named `gost_safe_mode` on the SD card's
+    boot partition (the `bootfs` drive).
+  - Remove the file (`sudo rm /boot/gost_safe_mode`) and reboot to return.
+- **Consoles are always on tty2–tty6** — press **Ctrl+Alt+F2** any time for a
+  login even while the kiosk owns tty1.
+- The kiosk has a **crash-loop breaker**: >6 restarts in 120s and it stops
+  itself with on-screen instructions instead of flashing forever.
+- **Test the OBD link directly:**
+  ```
+  /opt/gost/venv/bin/python3 /opt/gost/tools/test_obd.py
+  ```
+  It scans every port/baud, and on a working link dumps live RPM/speed/
+  coolant plus stored trouble codes — the definitive "is it the adapter, the
+  truck, or the software" check.
+- **Watch the backend live:** `journalctl -u hud-backend -f` (it logs every
+  OBD connection attempt, the protocol, and the full supported-PID list).
 
 ## Testing in a VM (VirtualBox etc.)
 

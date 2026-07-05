@@ -118,6 +118,10 @@ a { color: var(--pri); }
 .stat-box { border: 1px solid var(--line); padding: 10px; }
 .stat-box .label { font-size: 11px; color: var(--dim); }
 .stat-box .value { font-size: 28px; }
+#drive-live-banner { font-size: 12px; letter-spacing: 2px; padding: 4px 8px; margin-bottom: 8px; border: 1px solid var(--line); }
+#drive-live-banner:empty { display: none; }
+#drive-live-banner.live { color: #4fe38a; border-color: #4fe38a; }
+#drive-live-banner.sim { color: var(--dim); }
 #drive-notconnected {
   position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
   background: rgba(0,0,0,0.75); font-size: 22px; letter-spacing:3px;
@@ -263,6 +267,7 @@ a { color: var(--pri); }
       <section id="tab-drive" class="tab">
         <div class="frame" data-title="DRIVE" style="height:100%;">
           <div id="drive-notconnected" class="hidden">*** NOT CONNECTED ***</div>
+          <div id="drive-live-banner"></div>
           <div id="drive-grid"></div>
         </div>
       </section>
@@ -969,6 +974,12 @@ function buildHome() {
  * DRIVE TAB
  * ========================================================================== */
 function renderDrive(t) {
+  // Top-bar source indicator: unmistakable when we're on the real truck.
+  const srcEl = $("#src-label");
+  if (srcEl) {
+    if (t && t.live) { srcEl.textContent = "● LIVE · OBDLINK"; srcEl.style.color = "var(--ok, #4fe38a)"; }
+    else { srcEl.textContent = srcModeLabel(t && t.source_mode); srcEl.style.color = ""; }
+  }
   const overlay = $("#drive-notconnected");
   const connected = t && t.connected;
   overlay.classList.toggle("hidden", !!connected);
@@ -978,6 +989,12 @@ function renderDrive(t) {
     const status = (t && t.obd_status) || "waiting for backend...";
     overlay.innerHTML = '*** NOT CONNECTED ***<div style="font-size:12px;margin-top:10px;color:var(--dim);">OBD: ' + status + '</div>';
     return;
+  }
+  // Banner across the top of DRIVE: LIVE (real truck) vs SHOWCASE (sim).
+  const banner = $("#drive-live-banner");
+  if (banner) {
+    if (t.live) { banner.textContent = "● LIVE — OBDLink  " + (t.obd_status || ""); banner.className = "live"; }
+    else { banner.textContent = "◌ SHOWCASE (simulated) — " + (t.obd_status || "no OBD link"); banner.className = "sim"; }
   }
   const v = t.values || {}, d = t.derived || {};
   const vtype = t.vtype;
