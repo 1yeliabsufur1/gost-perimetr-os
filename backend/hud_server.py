@@ -501,6 +501,40 @@ SLOW_PIDS = ["FUEL_LEVEL", "COOLANT_TEMP", "CONTROL_MODULE_VOLTAGE", "OIL_TEMP",
 # Baud rates to try, most-likely first. OBDLink EX defaults to 115200.
 OBD_BAUDS = [115200, 230400, 38400, 9600]
 
+# Connection attempts in priority order: (protocol, baud, label). Protocol 6
+# (ISO 15765-4 CAN 11-bit / 500 kbps) is forced first -- it's what modern
+# Fords (incl. the F-150 PowerBoost, whose ECUs answer on 7E8/7EC/7EE 11-bit
+# headers) actually use. Auto-detect is the fallback. 250k protocols (9/10)
+# are deliberately NOT forced -- they false-positive as "Car Connected" then
+# CAN-ERROR on every real query.
+OBD_ATTEMPTS = [
+    ("6", 115200, "6=CAN11/500"),
+    ("7", 115200, "7=CAN29/500"),
+    (None, 115200, "auto"),
+    (None, 38400, "auto@38400"),
+]
+
+
+def _reset_adapter(port, baud):
+    """Raw ATZ + input-buffer flush to clear any CAN stream the ELM327 is
+    still emitting from a prior session (that stale data desyncs python-obd's
+    init handshake and makes every connect fail). Best-effort; never raises."""
+    try:
+        import serial
+        s = serial.Serial(port, baud, timeout=1)
+        try:
+            s.write(b"\r")
+            time.sleep(0.3)
+            s.reset_input_buffer()
+            s.write(b"ATZ\r")
+            time.sleep(1.2)
+            s.reset_input_buffer()
+        finally:
+            s.close()
+        time.sleep(0.3)
+    except Exception as e:
+        log("OBD: pre-reset skipped:", e)
+
 # Engine is considered "running" at/above this RPM. Below it (≈0) on a hybrid
 # means the gas engine has shut off and the truck is on battery. Ford's V6
 # idles ~600-700 RPM, so anything under ~250 is engine-off, not a low idle.
@@ -569,91 +603,74 @@ class Telemetry:
             return False
 
         loop = asyncio.get_event_loop()
+        port = ports[0]
+        self.obd_port = port
         last_state = ""
-        for attempt in range(1, 4):  # 3 retry rounds
-            for port in ports:
-                for baud in OBD_BAUDS:
-                    self.obd_port = port
-                    self.obd_status = f"connecting {port} @ {baud} (try {attempt}/3)..."
-                    log("OBD:", self.obd_status)
-                    try:
-                        # check_voltage=False: skip the >6V gate that blocks
-                        # some adapter/vehicle combos even when the link is
-                        # fine. timeout=10: give the CAN protocol auto-search
-                        # (ISO 15765-4 on the PowerBoost) time to complete --
-                        # 2s was too short for the initial handshake.
-                        conn = await loop.run_in_executor(
-                            None,
-                            lambda p=port, b=baud: obd.OBD(
-                                portstr=p, baudrate=b, fast=False,
-                                timeout=10, check_voltage=False),
-                        )
-                    except Exception as e:
-                        log("OBD: error on", port, "@", baud, ":", e)
-                        continue
-                    # status() is the key diagnostic: "Not Connected" (no
-                    # adapter reply), "ELM Connected" (adapter OK, no car),
-                    # "OBD Connected"/"Car Connected" (full link).
+        for attempt in range(1, 3):
+            for proto, baud, label in OBD_ATTEMPTS:
+                self.obd_status = f"linking {port} @ {baud} proto {label} (try {attempt})..."
+                log("OBD:", self.obd_status)
+                # CRITICAL: flush the adapter first. After a prior session the
+                # ELM327 keeps streaming CAN frames, which desync python-obd's
+                # ATE0/ATH1 init ("did not return OK") and make every connect
+                # fail. A raw ATZ + input-buffer flush gives a clean start.
+                await loop.run_in_executor(None, _reset_adapter, port, baud)
+                try:
+                    conn = await loop.run_in_executor(
+                        None,
+                        lambda pr=proto, b=baud: obd.OBD(
+                            portstr=port, baudrate=b, protocol=pr,
+                            fast=False, timeout=12, check_voltage=False),
+                    )
+                except Exception as e:
+                    log("OBD: error", port, baud, label, ":", e)
+                    continue
+                try:
+                    state = str(conn.status())
+                except Exception:
                     state = ""
+                last_state = state or last_state
+                # Reject the false positive: protocol 9 (250k) reports "Car
+                # Connected" but 0100 returns CAN ERROR, so RPM isn't in the
+                # supported set. A REAL link on this truck exposes RPM (010C).
+                try:
+                    linked = conn.is_connected()
+                    sup = set(c.name for c in conn.supported_commands)
+                    real = linked and ("RPM" in sup or len(sup) > 12)
+                except Exception:
+                    linked, sup, real = False, set(), False
+                log(f"OBD: {port}@{baud} proto {label} -> status='{state}' "
+                    f"linked={linked} pids={len(sup)} real={real}")
+                if real:
+                    self.conn = conn
+                    self.connected = True
+                    self.live = True
+                    self.obd_linked = True
+                    proto_name = ""
                     try:
-                        state = str(conn.status())
+                        proto_name = conn.protocol_name() or ""
                     except Exception:
                         pass
-                    last_state = state or last_state
-                    try:
-                        ok = bool(conn and conn.is_connected())
-                    except Exception:
-                        ok = False
-                    log(f"OBD: {port}@{baud} -> status='{state}' is_connected={ok}")
-                    if ok:
-                        self.conn = conn
-                        self.connected = True
-                        self.live = True
-                        self.obd_linked = True
-                        proto, nsup = "", 0
-                        try:
-                            proto = conn.protocol_name() or ""
-                            nsup = len(conn.supported_commands)
-                        except Exception:
-                            pass
-                        self.obd_status = f"LIVE {port} @ {baud} [{proto}, {nsup} PIDs]"
-                        log("OBD: CONNECTED --", self.obd_status)
-                        try:
-                            names = sorted(c.name for c in conn.supported_commands)
-                            log("OBD: supported PIDs:", ", ".join(names))
-                        except Exception:
-                            pass
-                        return True
-                    # Adapter answered (ELM Connected) but the car didn't --
-                    # surface that on screen so it's obvious it's an ignition/
-                    # protocol thing, not a missing adapter. Keep this baud
-                    # (the adapter clearly works here) rather than thrashing.
-                    if state and "ELM" in state:
-                        self.obd_status = (
-                            f"adapter OK on {port} @ {baud} but car not "
-                            f"answering ('{state}') -- key ON, engine running?")
-                        try:
-                            conn.close()
-                        except Exception:
-                            pass
-                        # don't try other bauds on this port -- ELM is linked
-                        break
-                    try:
-                        if conn:
-                            conn.close()
-                    except Exception:
-                        pass
-                else:
-                    continue  # inner baud loop finished without break
-            await asyncio.sleep(1.0)
+                    self.obd_status = f"LIVE {port} @ {baud} [{proto_name}, {len(sup)} PIDs]"
+                    log("OBD: CONNECTED --", self.obd_status)
+                    log("OBD: supported PIDs:", ", ".join(sorted(sup)))
+                    return True
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            await asyncio.sleep(0.5)
 
         self.obd_linked = False
-        if last_state and "ELM" in last_state:
-            self.obd_status = (f"adapter linked on {ports[0]} but no ECU data "
-                               f"('{last_state}') -- ensure ignition is ON")
+        if last_state and ("Car" in last_state or "OBD" in last_state):
+            self.obd_status = (f"linked on {port} but PIDs empty "
+                               f"('{last_state}') -- key in RUN + engine on?")
+        elif last_state and "ELM" in last_state:
+            self.obd_status = (f"adapter OK on {port} but car not answering "
+                               f"('{last_state}') -- ignition in RUN?")
         else:
-            self.obd_status = (f"adapter on {ports[0]} not responding "
-                               f"('{last_state or 'no reply'}') -- check cable/port")
+            self.obd_status = (f"adapter on {port} not responding "
+                               f"('{last_state or 'no reply'}') -- check cable")
         log("OBD:", self.obd_status)
         return False
 
