@@ -550,6 +550,137 @@ def _reset_adapter(port, baud):
     except Exception as e:
         log("OBD: pre-reset skipped:", e)
 
+
+# PID name -> (OBD request hex, decoder). Decoder takes the list of data
+# bytes after the "41 xx" header and returns a plain float in the SAME units
+# python-obd uses (so derive()/the frontend are unchanged). Plain floats are
+# also JSON-serializable, unlike python-obd's pint Quantity objects.
+RAW_PIDS = {
+    "SPEED": ("010D", lambda b: float(b[0]) if b else None),                     # km/h
+    "RPM": ("010C", lambda b: (256 * b[0] + b[1]) / 4.0 if len(b) >= 2 else None),
+    "INTAKE_PRESSURE": ("010B", lambda b: float(b[0]) if b else None),           # kPa
+    "MAF": ("0110", lambda b: (256 * b[0] + b[1]) / 100.0 if len(b) >= 2 else None),
+    "FUEL_LEVEL": ("012F", lambda b: b[0] * 100.0 / 255 if b else None),
+    "COOLANT_TEMP": ("0105", lambda b: float(b[0] - 40) if b else None),         # C
+    "CONTROL_MODULE_VOLTAGE": ("0142", lambda b: (256 * b[0] + b[1]) / 1000.0 if len(b) >= 2 else None),
+    "OIL_TEMP": ("015C", lambda b: float(b[0] - 40) if b else None),
+    "BAROMETRIC_PRESSURE": ("0133", lambda b: float(b[0]) if b else None),
+    "HYBRID_BATTERY_REMAINING": ("015B", lambda b: b[0] * 100.0 / 255 if b else None),
+}
+
+
+class RawOBD:
+    """Minimal, robust ELM327 reader that talks the adapter directly instead
+    of through python-obd (whose ATE0/ATH1 init desyncs on this truck). It
+    forces a protocol, turns headers/echo off, and parses standard mode-01
+    responses ('41 0C 1A F8' -> RPM) itself. Returns plain floats."""
+
+    def __init__(self, port, baud, protocol):
+        import serial
+        self.ser = serial.Serial(port, baud, timeout=1)
+        self.ser.write(b"\r")
+        time.sleep(0.2)
+        self.ser.reset_input_buffer()
+        for cmd, wait in (("ATZ", 1.2), ("ATE0", 0.3), ("ATL0", 0.3),
+                          ("ATS0", 0.3), ("ATH0", 0.3),
+                          ("ATSP" + (protocol or "0"), 0.3)):
+            self._cmd(cmd, wait)
+        self._cmd("0100", 1.0)  # trigger protocol lock / wake the bus
+
+    def _cmd(self, s, wait=0.25):
+        self.ser.reset_input_buffer()
+        self.ser.write((s + "\r").encode())
+        time.sleep(wait)
+        buf = b""
+        end = time.time() + 2.5
+        while time.time() < end:
+            n = self.ser.in_waiting
+            if n:
+                buf += self.ser.read(n)
+                if b">" in buf:
+                    break
+            else:
+                time.sleep(0.05)
+        return buf.decode(errors="ignore")
+
+    def query_pid(self, req):
+        """req like '010C' -> list of data bytes, or None."""
+        resp = self._cmd(req, 0.25)
+        up = resp.upper()
+        if "NO DATA" in up or "ERROR" in up or "UNABLE" in up or "?" in up:
+            return None
+        resp_mode = "%02X" % (int(req[:2], 16) + 0x40)  # 01 -> 41
+        pid_byte = req[2:4].upper()
+        toks = [t for t in resp.replace("\r", " ").replace(">", " ").split()
+                if len(t) == 2 and all(ch in "0123456789ABCDEFabcdef" for ch in t)]
+        for i in range(len(toks) - 1):
+            if toks[i].upper() == resp_mode and toks[i + 1].upper() == pid_byte:
+                try:
+                    return [int(x, 16) for x in toks[i + 2:]]
+                except ValueError:
+                    return None
+        return None
+
+    def read(self, pid_name):
+        spec = RAW_PIDS.get(pid_name)
+        if not spec:
+            return None
+        req, decode = spec
+        try:
+            b = self.query_pid(req)
+            return decode(b) if b else None
+        except Exception:
+            return None
+
+    def alive(self):
+        return self.read("RPM") is not None or self.read("SPEED") is not None
+
+    @staticmethod
+    def _decode_dtc(a, b):
+        letter = "PCBU"[(a & 0xC0) >> 6]
+        return f"{letter}{(a & 0x30) >> 4}{a & 0x0F:X}{(b & 0xF0) >> 4:X}{b & 0x0F:X}"
+
+    def read_dtcs(self):
+        """Mode 03 -- stored trouble codes. Returns [(code, ''), ...]."""
+        resp = self._cmd("03", 0.4)
+        up = resp.upper()
+        if "NO DATA" in up or "ERROR" in up or "UNABLE" in up:
+            return []
+        toks = [t for t in resp.replace("\r", " ").replace(">", " ").split()
+                if len(t) == 2 and all(c in "0123456789ABCDEFabcdef" for c in t)]
+        try:
+            idx = next(i for i, t in enumerate(toks) if t.upper() == "43")
+        except StopIteration:
+            return []
+        rest = toks[idx + 1:]
+        if len(rest) % 2 == 1:   # leading DTC-count byte (CAN) -> skip
+            rest = rest[1:]
+        out = []
+        for i in range(0, len(rest) - 1, 2):
+            a, b = int(rest[i], 16), int(rest[i + 1], 16)
+            if a == 0 and b == 0:
+                continue
+            out.append((self._decode_dtc(a, b), ""))
+        return out
+
+    def close(self):
+        try:
+            self.ser.close()
+        except Exception:
+            pass
+
+
+def _try_raw(port, protocol, baud):
+    """Return a linked RawOBD (RPM answering) or None. Runs in an executor."""
+    try:
+        raw = RawOBD(port, baud, protocol)
+        if raw.read("RPM") is not None:
+            return raw
+        raw.close()
+    except Exception as e:
+        log("OBD raw: error", protocol, ":", e)
+    return None
+
 # Engine is considered "running" at/above this RPM. Below it (≈0) on a hybrid
 # means the gas engine has shut off and the truck is on battery. Ford's V6
 # idles ~600-700 RPM, so anything under ~250 is engine-off, not a low idle.
@@ -587,6 +718,8 @@ class Telemetry:
         self.connected = False   # showing ANY data (real OR demo fallback)
         self.live = False        # real OBD data is flowing (drives "LIVE" badge)
         self.obd_linked = False  # a real adapter connection is open
+        self.raw = None          # RawOBD instance when using the direct reader
+        self.use_raw = False     # True => read via RawOBD, not python-obd
         self.demo_t0 = time.time()
         self.obd_status = "idle"
         self.obd_port = ""
@@ -597,6 +730,22 @@ class Telemetry:
                 self.dtcs = json.loads(self.dtc_path.read_text())
             except Exception:
                 self.dtcs = {}
+
+    def _close_obd(self):
+        """Close whichever OBD connection is open (raw or python-obd)."""
+        if self.raw is not None:
+            try:
+                self.raw.close()
+            except Exception:
+                pass
+            self.raw = None
+        if self.conn is not None:
+            try:
+                self.conn.close()
+            except Exception:
+                pass
+            self.conn = None
+        self.use_raw = False
 
     async def connect_obd(self):
         """Try hard to link a real OBDLink/ELM327 adapter across every likely
@@ -621,6 +770,33 @@ class Telemetry:
         port = ports[0]
         self.obd_port = port
         last_state = ""
+
+        # --- RAW reader first: it bypasses python-obd's fragile init, which
+        # desyncs on this truck. Try the truck's protocol (6), then 7, then
+        # auto. If RPM answers, use the raw path -- most robust. ---
+        for proto, plabel in (("6", "raw-6"), ("7", "raw-7"), (None, "raw-auto")):
+            self.obd_status = f"linking {port} raw proto {proto or 'auto'}..."
+            log("OBD:", self.obd_status)
+            await loop.run_in_executor(None, _reset_adapter, port, 115200)
+            raw = await loop.run_in_executor(None, _try_raw, port, proto, 115200)
+            if raw is not None:
+                self.raw = raw
+                self.use_raw = True
+                self.conn = None
+                self.connected = True
+                self.live = True
+                self.obd_linked = True
+                rpm0 = raw.read("RPM")
+                self.obd_status = f"LIVE {port} raw proto {proto or 'auto'} [RPM={rpm0}]"
+                log("OBD: CONNECTED (raw) --", self.obd_status)
+                try:
+                    (STATE_DIR / "obd.json").write_text(json.dumps(
+                        {"port": port, "baud": 115200, "protocol": proto, "raw": True}))
+                except Exception:
+                    pass
+                return True
+
+        # --- python-obd fallback (kept in case raw ever misbehaves) ---
         # If obd_autodetect (or a prior successful link) saved a known-good
         # config, try it FIRST -- makes subsequent boots link on the first
         # shot instead of re-sweeping protocols.
@@ -727,6 +903,13 @@ class Telemetry:
         return False
 
     async def _query(self, pid_name):
+        loop = asyncio.get_event_loop()
+        # Raw path: direct ELM327 read, returns a plain float already.
+        if self.use_raw and self.raw is not None:
+            try:
+                return await loop.run_in_executor(None, self.raw.read, pid_name)
+            except Exception:
+                return None
         import obd
         cmd = getattr(obd.commands, pid_name, None)
         if cmd is None or self.conn is None:
@@ -734,14 +917,15 @@ class Telemetry:
         try:
             # force=True: send the PID even if python-obd's supported-list
             # (built from 0100) doesn't include it. On this truck 0100 can
-            # return CAN ERROR while the individual PIDs (010C RPM, 010D
-            # speed) answer fine -- so trusting the support-list would read
-            # NOTHING. Forcing the query is what actually gets live data.
-            r = await asyncio.get_event_loop().run_in_executor(
+            # return CAN ERROR while the individual PIDs answer fine.
+            r = await loop.run_in_executor(
                 None, lambda: self.conn.query(cmd, force=True))
             if r is None or r.is_null():
                 return None
-            return r.value
+            # Return a PLAIN FLOAT, not a pint Quantity -- Quantities are not
+            # JSON-serializable, so the telemetry broadcast would throw and the
+            # frontend would freeze the moment real data arrived.
+            return _num(r.value)
         except Exception:
             return None
 
@@ -764,18 +948,20 @@ class Telemetry:
         return got
 
     async def poll_dtc(self):
+        loop = asyncio.get_event_loop()
         try:
-            import obd
-        except ImportError:
-            return
-        try:
-            r = await asyncio.get_event_loop().run_in_executor(None, self.conn.query, obd.commands.GET_DTC)
-            if r is None or r.is_null():
-                return
+            codes = []  # list of (code, desc)
+            if self.use_raw and self.raw is not None:
+                codes = await loop.run_in_executor(None, self.raw.read_dtcs)
+            elif self.conn is not None:
+                import obd
+                r = await loop.run_in_executor(None, self.conn.query, obd.commands.GET_DTC)
+                if r is not None and not r.is_null():
+                    codes = [(c, d or "") for c, d in (r.value or [])]
             now_iso = datetime.now().isoformat()
             changed = False
-            for code, desc in (r.value or []):
-                if code not in self.dtcs:
+            for code, desc in (codes or []):
+                if code and code not in self.dtcs:
                     self.dtcs[code] = {"first_seen": now_iso, "desc": desc or ""}
                     changed = True
             if changed:
@@ -863,6 +1049,8 @@ class Telemetry:
 
                 # Explicit SHOWCASE mode -- always simulated, never real.
                 if mode == "DEMO":
+                    if self.obd_linked or self.raw or self.conn:
+                        self._close_obd()   # release the port for showcase
                     self.demo_tick()
                     self.live = False
                     self.obd_linked = False
@@ -909,22 +1097,20 @@ class Telemetry:
                 if got == 0:
                     dead_cycles += 1
                     if dead_cycles > 25:  # ~5s of total silence
-                        # Only give up the link if the ADAPTER actually
-                        # disconnected -- a quiet-but-linked ECU (is_connected
-                        # still True) must NOT flap back to SHOWCASE.
+                        # Only give up if the adapter actually disconnected -- a
+                        # quiet-but-linked ECU must NOT flap back to SHOWCASE.
                         try:
-                            still = self.conn.is_connected()
+                            if self.use_raw:
+                                still = bool(self.raw and self.raw.alive())
+                            else:
+                                still = self.conn.is_connected()
                         except Exception:
                             still = False
                         if not still:
                             log("OBD: adapter disconnected, re-detecting")
                             self.obd_linked = False
                             self.live = False
-                            try:
-                                self.conn.close()
-                            except Exception:
-                                pass
-                            self.conn = None
+                            self._close_obd()
                             self.values = {}
                             self.obd_status = "link lost -- searching..."
                             dead_cycles = 0
@@ -938,6 +1124,7 @@ class Telemetry:
                 self.derive()
             except Exception as e:
                 log("telemetry loop error (continuing):", e)
+                self._close_obd()
                 self.obd_linked = False
                 self.live = False
             await asyncio.sleep(0.2)
