@@ -144,8 +144,17 @@ for unit in hud-backend.service hud-kiosk.service; do
 done
 
 systemctl daemon-reload
+# Disable first so a stale wants-symlink from an earlier install (e.g. the
+# old graphical.target.wants/hud-kiosk.service) is removed before we re-point
+# it at multi-user.target. Without this, re-running the installer would leave
+# the kiosk wanted only by the never-reached graphical.target.
+systemctl disable hud-backend.service hud-kiosk.service 2>/dev/null || true
 systemctl enable hud-backend.service
 systemctl enable hud-kiosk.service
+# Pi OS Lite already defaults to multi-user.target, but pin it so nothing
+# (a stray desktop install, a customization) can switch us to a graphical
+# target the kiosk isn't wired for.
+systemctl set-default multi-user.target 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
 # 7. SPI/I2C dtparam for MCP3008 pots / optional hardware, if not already set.

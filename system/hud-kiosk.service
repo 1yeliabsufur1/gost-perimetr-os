@@ -1,7 +1,7 @@
 [Unit]
 Description=GOST/PERIMETR OS kiosk (cage + chromium)
-After=hud-backend.service getty@tty1.service
-Wants=hud-backend.service
+After=hud-backend.service seatd.service getty@tty1.service systemd-user-sessions.service
+Wants=hud-backend.service seatd.service
 Conflicts=getty@tty1.service
 # Appliance rule: never rate-limit into a permanent 'failed' state -- if
 # cage/chromium crash-loop, keep retrying (with RestartSec pacing) instead
@@ -25,4 +25,9 @@ Restart=always
 RestartSec=2
 
 [Install]
-WantedBy=graphical.target
+# CRITICAL: multi-user.target, NOT graphical.target. Pi OS Lite boots to
+# multi-user.target and never reaches graphical.target (no display manager),
+# so a graphical.target-wanted unit would silently never start -- which is
+# exactly why the kiosk never took the screen and the operator saw a login
+# prompt instead. multi-user.target is reached on every single boot.
+WantedBy=multi-user.target
