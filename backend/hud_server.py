@@ -498,6 +498,32 @@ FAST_PIDS = ["SPEED", "RPM", "INTAKE_PRESSURE", "MAF"]
 SLOW_PIDS = ["FUEL_LEVEL", "COOLANT_TEMP", "CONTROL_MODULE_VOLTAGE", "OIL_TEMP",
              "BAROMETRIC_PRESSURE", "HYBRID_BATTERY_REMAINING"]
 
+# Engine is considered "running" at/above this RPM. Below it (≈0) on a hybrid
+# means the gas engine has shut off and the truck is on battery. Ford's V6
+# idles ~600-700 RPM, so anything under ~250 is engine-off, not a low idle.
+ENGINE_ON_RPM = 250.0
+
+
+def classify_drive_mode(rpm, speed_mph):
+    """Derive what an F-150 PowerBoost (or any hybrid) is doing from just the
+    two universal OBD2 PIDs, so we can show engine-vs-battery without any
+    Ford-specific PIDs:
+
+      ENGINE  -- gas engine running (RPM above threshold)
+      EV      -- moving with the engine off (battery drive)
+      IDLE-EV -- stopped with the engine off (electric hold / stop-start)
+      STOP    -- stopped, engine running
+      None    -- no RPM data (can't tell)
+
+    rpm: engine RPM (may be 0 when on battery), speed_mph: vehicle speed.
+    """
+    if rpm is None:
+        return None
+    moving = (speed_mph or 0) > 1.0
+    if rpm >= ENGINE_ON_RPM:
+        return "ENGINE" if moving else "STOP"
+    return "EV" if moving else "IDLE-EV"
+
 
 class Telemetry:
     def __init__(self, state):
@@ -624,6 +650,16 @@ class Telemetry:
             log("DTC poll failed:", e)
 
     def detect_vtype(self):
+        # Runtime upgrade to hybrid: if we EVER see the truck moving with the
+        # engine off, it's a hybrid/EV regardless of which PIDs answered. This
+        # catches the F-150 PowerBoost, whose standard hybrid-battery PID Ford
+        # often doesn't expose (so it would otherwise mis-detect as plain gas).
+        rpm = _num(self.values.get("RPM"))
+        speed_kph = _num(self.values.get("SPEED"))
+        mph = speed_kph * 0.621371 if speed_kph is not None else 0
+        if rpm is not None and rpm < ENGINE_ON_RPM and mph > 1.0:
+            self.vtype = "hybrid"
+            return
         if self.vtype:
             return
         if self.values.get("HYBRID_BATTERY_REMAINING") is not None:
@@ -643,12 +679,14 @@ class Telemetry:
         mpg = 11.3 * mph / maf if (maf is not None and maf >= 0.5 and mph is not None) else None
         coolant_c = _num(self.values.get("COOLANT_TEMP"))
         oil_c = _num(self.values.get("OIL_TEMP"))
+        rpm = _num(self.values.get("RPM"))
         self.derived = {
             "mph": mph,
             "boost_psi": boost_psi,
             "mpg": mpg,
             "coolant_f": (coolant_c * 9 / 5 + 32) if coolant_c is not None else None,
             "oil_f": (oil_c * 9 / 5 + 32) if oil_c is not None else None,
+            "drive_mode": classify_drive_mode(rpm, mph),
         }
 
     def demo_tick(self):
@@ -674,6 +712,7 @@ class Telemetry:
         self.derived = {
             "mph": speed_mph, "boost_psi": 0.0, "mpg": None,
             "coolant_f": self.values["COOLANT_TEMP"] * 9 / 5 + 32, "oil_f": None,
+            "drive_mode": "EV" if speed_mph > 1 else "IDLE-EV",
         }
         if "P1A42" not in self.dtcs:
             self.dtcs["P1A42"] = {"first_seen": datetime.now().isoformat(),

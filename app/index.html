@@ -981,26 +981,41 @@ function renderDrive(t) {
   }
   const v = t.values || {}, d = t.derived || {};
   const vtype = t.vtype;
+  const hasHvSoc = v.HYBRID_BATTERY_REMAINING != null;
   let socLabel, socVal, rangeVal, energyLabel, energyVal;
-  if (vtype === "ev" || vtype === "hybrid") {
+  if (vtype === "ev" || (vtype === "hybrid" && hasHvSoc)) {
     socLabel = "STATE OF CHARGE"; socVal = v.HYBRID_BATTERY_REMAINING;
     rangeVal = socVal != null ? Math.round((socVal / 100) * 260) : null;
     energyLabel = "PACK"; energyVal = socVal != null ? (socVal / 100 * 75).toFixed(1) + " kWh" : "--";
   } else {
+    // Gas, or a hybrid (F-150 PowerBoost) whose HV-battery PID Ford doesn't
+    // expose -- use the gas tank + economy, which it does report.
     socLabel = "FUEL LEVEL"; socVal = v.FUEL_LEVEL;
     const mpg = d.mpg || 24;
     rangeVal = socVal != null ? Math.round((socVal / 100) * 26 * mpg) : null;
-    energyLabel = "ECONOMY"; energyVal = d.mpg != null ? d.mpg.toFixed(1) + " MPG" : "EV";
+    energyLabel = "ECONOMY"; energyVal = d.mpg != null ? d.mpg.toFixed(1) + " MPG" : (d.drive_mode === "EV" ? "EV" : "--");
   }
   const grid = $("#drive-grid");
   grid.innerHTML = "";
-  const box = (label, value) => el("div", { class: "stat-box" }, [
+  const box = (label, value, extraClass) => el("div", { class: "stat-box" + (extraClass ? " " + extraClass : "") }, [
     el("div", { class: "label" }, [label]), el("div", { class: "value glow" }, [value]),
   ]);
+  // DRIVE MODE up top for hybrids/EVs -- the engine-vs-battery state, derived
+  // from RPM+speed, so the PowerBoost's switching is visible at a glance.
+  if (d.drive_mode && vtype !== "gas") {
+    const onBattery = d.drive_mode === "EV" || d.drive_mode === "IDLE-EV";
+    grid.appendChild(el("div", { class: "stat-box", style: "grid-column: span 2;" }, [
+      el("div", { class: "label" }, ["DRIVE MODE"]),
+      el("div", { class: "value glow", style: onBattery ? "color:var(--ok, #4fe38a);" : "" },
+        [onBattery ? "⚡ BATTERY" : "⛽ ENGINE"]),
+      el("div", { class: "label" }, [d.drive_mode]),
+    ]));
+  }
   grid.appendChild(box(socLabel, socVal != null ? Math.round(socVal) + "%" : "--"));
   grid.appendChild(box("RANGE", rangeVal != null ? rangeVal + " MI" : "--"));
   grid.appendChild(box("SPEED", d.mph != null ? Math.round(d.mph) + " MPH" : "--"));
   grid.appendChild(box(energyLabel, energyVal));
+  grid.appendChild(box("RPM", v.RPM != null ? Math.round(v.RPM) : "--"));
   const powerFrac = d.mph != null ? clamp(d.mph / 90, -1, 1) : 0;
   const pbar = el("div", { class: "stat-box", style: "grid-column: span 2;" }, [
     el("div", { class: "label" }, ["POWER / REGEN"]),
