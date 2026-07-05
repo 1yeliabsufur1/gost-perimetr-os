@@ -1070,6 +1070,14 @@ async def route_message(state: GostState, ws, msg):
         await ws.send(json.dumps({"type": "wifi.join", "ok": ok}))
     elif t == "dashcam.set":
         await state.dashcam.set_enabled(bool(msg.get("on")))
+    elif t == "power":
+        action = msg.get("action")
+        if action in ("off", "reboot"):
+            cmd = "poweroff" if action == "off" else "reboot"
+            try:
+                await asyncio.create_subprocess_exec("sudo", "/usr/local/sbin/gost-power", cmd)
+            except Exception as e:
+                log("power command failed:", e)
     elif t == "setpass":
         # Only the password is applied to the system account (via gost-setpass,
         # which always targets the pre-detected GOST_USER from install.sh).

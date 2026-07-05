@@ -118,7 +118,8 @@ mkdir -p "$GOST_HOME/maps" "$GOST_HOME/state"
 
 chown -R "$GOST_USER":"$GOST_USER" "$GOST_HOME"
 chmod +x "$GOST_HOME/install.sh" "$GOST_HOME/system/kiosk-start.sh" \
-  "$GOST_HOME/system/gost-setpass" "$GOST_HOME/system/gost-settime" 2>/dev/null || true
+  "$GOST_HOME/system/gost-setpass" "$GOST_HOME/system/gost-settime" \
+  "$GOST_HOME/system/gost-power" 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
 # 5. Privileged helpers (password/clock never touch argv -- piped via stdin)
@@ -126,6 +127,7 @@ chmod +x "$GOST_HOME/install.sh" "$GOST_HOME/system/kiosk-start.sh" \
 # ---------------------------------------------------------------------------
 install -m 750 -o root -g root "$GOST_HOME/system/gost-setpass" /usr/local/sbin/gost-setpass
 install -m 750 -o root -g root "$GOST_HOME/system/gost-settime" /usr/local/sbin/gost-settime
+install -m 750 -o root -g root "$GOST_HOME/system/gost-power" /usr/local/sbin/gost-power
 
 SUDOERS_TMP="$(mktemp)"
 sed "s/__GOST_USER__/$GOST_USER/g" "$GOST_HOME/system/sudoers-gost" > "$SUDOERS_TMP"

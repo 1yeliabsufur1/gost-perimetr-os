@@ -4,3 +4,4 @@
 # prompt, restricted to these exact helper scripts.
 __GOST_USER__ ALL=(root) NOPASSWD: /usr/local/sbin/gost-setpass
 __GOST_USER__ ALL=(root) NOPASSWD: /usr/local/sbin/gost-settime
+__GOST_USER__ ALL=(root) NOPASSWD: /usr/local/sbin/gost-power

@@ -231,6 +231,7 @@ a { color: var(--pri); }
 </head>
 <body>
 <div id="crt-overlay"></div>
+<div id="brightness-dimmer" style="position:fixed; inset:0; background:#000; opacity:0; pointer-events:none; z-index:10000;"></div>
 <div id="app">
 
   <!-- ======================= SETUP WIZARD ======================= -->
@@ -343,6 +344,12 @@ a { color: var(--pri); }
         <div class="frame" data-title="THEME">
           <div class="settings-row" id="theme-swatches"></div>
         </div>
+        <div class="frame" data-title="BRIGHTNESS">
+          <div class="settings-row">
+            <input type="range" min="20" max="100" value="100" data-focus id="brightness-slider" style="width:60%;">
+            <span id="brightness-val" class="dim">100%</span>
+          </div>
+        </div>
         <div class="frame" data-title="WI-FI">
           <div class="settings-row">
             <button data-focus id="wifi-scan-btn">[ ADD / MANAGE WI-FI ]</button>
@@ -365,6 +372,13 @@ a { color: var(--pri); }
           <div class="settings-row">
             <button data-focus id="update-check-btn">[ CHECK FOR UPDATES ]</button>
             <span id="update-result" class="dim"></span>
+          </div>
+        </div>
+        <div class="frame" data-title="POWER">
+          <div class="settings-row">
+            <button data-focus id="shutdown-btn">[ ⏻ SAFE SHUTDOWN ]</button>
+            <button data-focus id="reboot-btn">[ ↻ REBOOT ]</button>
+            <span id="power-result" class="dim"></span>
           </div>
         </div>
         <div class="frame" data-title="ABOUT">
@@ -431,7 +445,7 @@ const LS = {
 /* ------------------------------- config ---------------------------------- */
 const Config = {
   data: Object.assign({
-    setup_done: false, source_mode: "AUTO", theme: "gost", guide3: {}, dashcam: false, channel_names: {},
+    setup_done: false, source_mode: "AUTO", theme: "gost", guide3: {}, dashcam: false, channel_names: {}, brightness: 100,
   }, LS.get("config", {})),
   save() { LS.set("config", this.data); },
   set(key, value, fromRemote) {
@@ -819,6 +833,12 @@ const Wizard = {
       body.appendChild(el("div", { class: "line" }, [p2]));
       body.appendChild(err);
       body.appendChild(el("div", { class: "line" }, [btn]));
+      // Enter advances field-to-field (uname -> pw -> confirm -> submit),
+      // like every login form. Without this, Enter did nothing and the
+      // operator was stuck (reported on real hardware).
+      uname.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); p1.focus(); } });
+      p1.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); p2.focus(); } });
+      p2.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); this.submitPassword(); } });
       uname.focus();
     } else if (this.step === 2) {
       body.appendChild(el("div", { class: "line glow" }, ["CONNECT THIS UNIT TO THE INTERNET?"]));
@@ -2149,6 +2169,37 @@ function buildSettings() {
     $("#clock-set-result").textContent = "SETTING...";
   });
   $("#dashcam-toggle-btn").textContent = Config.data.dashcam ? "ON" : "OFF";
+
+  // Brightness dimmer -- a black overlay whose opacity scales inversely with
+  // the slider (100% = fully clear, 20% = heavily dimmed). Persisted.
+  const brightSlider = $("#brightness-slider");
+  const applyBrightness = (v) => {
+    $("#brightness-dimmer").style.opacity = ((100 - v) / 130).toFixed(3);
+    $("#brightness-val").textContent = v + "%";
+  };
+  brightSlider.value = Config.data.brightness != null ? Config.data.brightness : 100;
+  applyBrightness(Number(brightSlider.value));
+  brightSlider.addEventListener("input", () => {
+    const v = Number(brightSlider.value);
+    applyBrightness(v);
+    Config.set("brightness", v);
+  });
+
+  // Safe shutdown / reboot -- a car appliance must never be power-yanked
+  // (SD corruption). On device these run via a sudo-whitelisted helper.
+  $("#shutdown-btn").addEventListener("click", () => {
+    confirmModal("SAFE SHUTDOWN", "POWER OFF THE UNIT NOW?", () => {
+      if (Net.connected) { Net.send({ type: "power", action: "off" }); $("#power-result").textContent = "SHUTTING DOWN..."; }
+      else $("#power-result").textContent = "REQUIRES DEVICE";
+    });
+  });
+  $("#reboot-btn").addEventListener("click", () => {
+    confirmModal("REBOOT", "RESTART THE UNIT NOW?", () => {
+      if (Net.connected) { Net.send({ type: "power", action: "reboot" }); $("#power-result").textContent = "REBOOTING..."; }
+      else $("#power-result").textContent = "REQUIRES DEVICE";
+    });
+  });
+
   updateSourceButtons();
 }
 function srcModeLabel(mode) {

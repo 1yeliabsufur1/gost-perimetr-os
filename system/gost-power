@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Clean power control for the kiosk UI's SAFE SHUTDOWN / REBOOT buttons.
+# A car appliance must never be power-yanked (SD corruption), so the UI needs
+# a way to halt/reboot cleanly. Installed to /usr/local/sbin/gost-power;
+# sudo-whitelisted for the operator on this exact path with a fixed argument.
+set -euo pipefail
+
+case "${1:-}" in
+  poweroff) exec systemctl poweroff ;;
+  reboot)   exec systemctl reboot ;;
+  *) echo "gost-power: expected 'poweroff' or 'reboot'" >&2; exit 1 ;;
+esac
