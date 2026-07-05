@@ -621,8 +621,24 @@ class Telemetry:
         port = ports[0]
         self.obd_port = port
         last_state = ""
+        # If obd_autodetect (or a prior successful link) saved a known-good
+        # config, try it FIRST -- makes subsequent boots link on the first
+        # shot instead of re-sweeping protocols.
+        attempts = list(OBD_ATTEMPTS)
+        try:
+            saved = json.loads((STATE_DIR / "obd.json").read_text())
+            sp, sb = saved.get("protocol"), int(saved.get("baud", 115200))
+            first = (sp, sb, f"saved:{sp or 'auto'}")
+            if first not in attempts:
+                attempts.insert(0, first)
+            if saved.get("port"):
+                port = saved["port"]
+                self.obd_port = port
+            log("OBD: using saved config", saved)
+        except Exception:
+            pass
         for attempt in range(1, 3):
-            for proto, baud, label in OBD_ATTEMPTS:
+            for proto, baud, label in attempts:
                 self.obd_status = f"linking {port} @ {baud} proto {label} (try {attempt})..."
                 log("OBD:", self.obd_status)
                 # CRITICAL: flush the adapter first. After a prior session the
@@ -683,6 +699,13 @@ class Telemetry:
                         pass
                     self.obd_status = f"LIVE {port} @ {baud} [{proto_name}, RPM={rpm_val}]"
                     log("OBD: CONNECTED --", self.obd_status)
+                    # Remember this working combo for instant reconnect next boot.
+                    try:
+                        (STATE_DIR / "obd.json").write_text(json.dumps(
+                            {"port": port, "baud": baud,
+                             "protocol": proto if not str(label).startswith("saved") else proto}))
+                    except Exception:
+                        pass
                     return True
                 try:
                     conn.close()
