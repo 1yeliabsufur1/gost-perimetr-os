@@ -569,6 +569,7 @@ class Telemetry:
             return False
 
         loop = asyncio.get_event_loop()
+        last_state = ""
         for attempt in range(1, 4):  # 3 retry rounds
             for port in ports:
                 for baud in OBD_BAUDS:
@@ -576,18 +577,34 @@ class Telemetry:
                     self.obd_status = f"connecting {port} @ {baud} (try {attempt}/3)..."
                     log("OBD:", self.obd_status)
                     try:
+                        # check_voltage=False: skip the >6V gate that blocks
+                        # some adapter/vehicle combos even when the link is
+                        # fine. timeout=10: give the CAN protocol auto-search
+                        # (ISO 15765-4 on the PowerBoost) time to complete --
+                        # 2s was too short for the initial handshake.
                         conn = await loop.run_in_executor(
                             None,
                             lambda p=port, b=baud: obd.OBD(
-                                portstr=p, baudrate=b, fast=False, timeout=2),
+                                portstr=p, baudrate=b, fast=False,
+                                timeout=10, check_voltage=False),
                         )
                     except Exception as e:
                         log("OBD: error on", port, "@", baud, ":", e)
                         continue
+                    # status() is the key diagnostic: "Not Connected" (no
+                    # adapter reply), "ELM Connected" (adapter OK, no car),
+                    # "OBD Connected"/"Car Connected" (full link).
+                    state = ""
+                    try:
+                        state = str(conn.status())
+                    except Exception:
+                        pass
+                    last_state = state or last_state
                     try:
                         ok = bool(conn and conn.is_connected())
                     except Exception:
                         ok = False
+                    log(f"OBD: {port}@{baud} -> status='{state}' is_connected={ok}")
                     if ok:
                         self.conn = conn
                         self.connected = True
@@ -607,15 +624,36 @@ class Telemetry:
                         except Exception:
                             pass
                         return True
+                    # Adapter answered (ELM Connected) but the car didn't --
+                    # surface that on screen so it's obvious it's an ignition/
+                    # protocol thing, not a missing adapter. Keep this baud
+                    # (the adapter clearly works here) rather than thrashing.
+                    if state and "ELM" in state:
+                        self.obd_status = (
+                            f"adapter OK on {port} @ {baud} but car not "
+                            f"answering ('{state}') -- key ON, engine running?")
+                        try:
+                            conn.close()
+                        except Exception:
+                            pass
+                        # don't try other bauds on this port -- ELM is linked
+                        break
                     try:
                         if conn:
                             conn.close()
                     except Exception:
                         pass
-            await asyncio.sleep(1.0)  # brief pause between retry rounds
+                else:
+                    continue  # inner baud loop finished without break
+            await asyncio.sleep(1.0)
 
         self.obd_linked = False
-        self.obd_status = f"adapter on {ports[0]} but no ECU link after 3 tries"
+        if last_state and "ELM" in last_state:
+            self.obd_status = (f"adapter linked on {ports[0]} but no ECU data "
+                               f"('{last_state}') -- ensure ignition is ON")
+        else:
+            self.obd_status = (f"adapter on {ports[0]} not responding "
+                               f"('{last_state or 'no reply'}') -- check cable/port")
         log("OBD:", self.obd_status)
         return False
 
@@ -762,6 +800,7 @@ class Telemetry:
                 # switching to real data the instant the adapter links up.
                 if not self.obd_linked:
                     now = time.time()
+                    diag = "searching for adapter..."
                     if now - last_connect > 6:   # don't hammer the port
                         last_connect = now
                         self.values = {}
@@ -769,10 +808,13 @@ class Telemetry:
                         await self.connect_obd()
                         dead_cycles = 0
                     if not self.obd_linked:
-                        # SHOWCASE fallback -- clearly flagged as not live.
+                        # SHOWCASE fallback -- keep the DETAILED diagnostic from
+                        # connect_obd (e.g. "adapter OK but car not answering")
+                        # visible on the DRIVE banner so the screen self-explains.
+                        diag = self.obd_status
                         self.demo_tick()
                         self.live = False
-                        self.obd_status = "no OBD link -- SHOWCASE fallback (retrying)"
+                        self.obd_status = "SHOWCASE fallback -- " + diag
                         await asyncio.sleep(0.2)
                         continue
 
@@ -792,18 +834,29 @@ class Telemetry:
                 if got == 0:
                     dead_cycles += 1
                     if dead_cycles > 25:  # ~5s of total silence
-                        log("OBD: link went silent, dropping to re-detect")
-                        self.obd_linked = False
-                        self.live = False
+                        # Only give up the link if the ADAPTER actually
+                        # disconnected -- a quiet-but-linked ECU (is_connected
+                        # still True) must NOT flap back to SHOWCASE.
                         try:
-                            self.conn.close()
+                            still = self.conn.is_connected()
                         except Exception:
-                            pass
-                        self.conn = None
-                        self.values = {}
-                        self.obd_status = "link lost -- searching..."
+                            still = False
+                        if not still:
+                            log("OBD: adapter disconnected, re-detecting")
+                            self.obd_linked = False
+                            self.live = False
+                            try:
+                                self.conn.close()
+                            except Exception:
+                                pass
+                            self.conn = None
+                            self.values = {}
+                            self.obd_status = "link lost -- searching..."
+                            dead_cycles = 0
+                            continue
+                        # linked but quiet: keep waiting, note it on screen
+                        self.obd_status = "LIVE but ECU quiet (no PID answers yet)"
                         dead_cycles = 0
-                        continue
                 else:
                     dead_cycles = 0
                 self.detect_vtype()
