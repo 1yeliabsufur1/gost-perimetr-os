@@ -603,7 +603,7 @@ const Net = {
     try {
       this.ws = new WebSocket("ws://127.0.0.1:8765");
     } catch (e) { this.onFail(); return; }
-    this.ws.onopen = () => { this.connected = true; updateConnIndicator(); };
+    this.ws.onopen = () => { this.connected = true; Demo.stop(); updateConnIndicator(); };
     this.ws.onclose = () => { this.connected = false; updateConnIndicator(); this.onFail(); };
     this.ws.onerror = () => { this.onFail(); };
     this.ws.onmessage = (ev) => {
@@ -631,7 +631,7 @@ const Net = {
     else if (msg.type === "wifi.scan") { Wifi.renderScanResults(msg.networks); }
     else if (msg.type === "wifi.join") {
       const status = $("#wifi-connect-status");
-      if (status) status.textContent = msg.ok ? "CONNECTED" : "CONNECTION FAILED -- CHECK PASSWORD";
+      if (status) status.textContent = msg.ok ? "CONNECTED" : ("FAILED: " + (msg.detail || "check password"));
     }
     else if (msg.type === "update.check") { $("#update-result").textContent = msg.ok ? "UP TO DATE" : "CHECK FAILED"; }
     else if (msg.type === "clock.set") { $("#clock-set-result").textContent = msg.ok ? "CLOCK SET" : "FAILED -- CHECK DEVICE LOGS"; }
@@ -655,17 +655,26 @@ function onConfigSynced() {
  * This is both the dev environment and the GitHub Pages standalone demo.
  * ========================================================================== */
 const Demo = {
-  running: false, t0: 0, dtcs: {},
+  running: false, t0: 0, dtcs: {}, timer: null,
   start() {
-    if (this.running) return;
+    if (this.running || Net.connected) return; // never run the sim over a live backend
     this.running = true;
     this.t0 = Date.now();
     updateConnIndicator();
     renderAbout({ version: "3.0.0 (DEMO)", hostname: "browser", uptime_sec: null });
     Nav.startDemoFix();
-    setInterval(() => this.tick(), 200);
+    this.timer = setInterval(() => this.tick(), 200);
+  },
+  stop() {
+    // Called the moment the real backend WS connects -- otherwise a demo loop
+    // started during a slow boot keeps painting fake telemetry over the truck's
+    // real (or NOT-CONNECTED) data. This was "only shows demo" on device.
+    if (this.timer) { clearInterval(this.timer); this.timer = null; }
+    this.running = false;
+    if (Nav.fixTimer) { clearInterval(Nav.fixTimer); Nav.fixTimer = null; }
   },
   tick() {
+    if (Net.connected) { this.stop(); return; }
     const t = (Date.now() - this.t0) / 1000;
     const vtype = "ev";
     const speedMph = 35 + 25 * Math.abs(((t / 20) % 2) - 1);
@@ -963,7 +972,13 @@ function renderDrive(t) {
   const overlay = $("#drive-notconnected");
   const connected = t && t.connected;
   overlay.classList.toggle("hidden", !!connected);
-  if (!connected) return;
+  if (!connected) {
+    // Show the backend's live OBD status so it's obvious WHY there's no data
+    // (no adapter vs adapter-but-no-vehicle-link vs SHOWCASE off).
+    const status = (t && t.obd_status) || "waiting for backend...";
+    overlay.innerHTML = '*** NOT CONNECTED ***<div style="font-size:12px;margin-top:10px;color:var(--dim);">OBD: ' + status + '</div>';
+    return;
+  }
   const v = t.values || {}, d = t.derived || {};
   const vtype = t.vtype;
   let socLabel, socVal, rangeVal, energyLabel, energyVal;
@@ -1257,8 +1272,23 @@ function renderTvChannelList() {
 }
 function renderTvStatus() {
   if (!Net.tvStatus) return;
-  $("#tv-overlay-text").textContent = `CH${Net.tvStatus.chan || "--"} -- ${Net.tvStatus.mode.toUpperCase()}${Net.tvStatus.paused ? " (PAUSED)" : ""}`;
-  $("#tv-idle").classList.toggle("hidden", !!Net.tvStatus.chan);
+  const st = Net.tvStatus;
+  $("#tv-overlay-text").textContent = `CH${st.chan || "--"} -- ${st.mode.toUpperCase()}${st.paused ? " (PAUSED)" : ""}`;
+  $("#tv-idle").classList.toggle("hidden", !!st.chan);
+  // On device the backend plays real video via mpv (a fullscreen window
+  // OVER the kiosk), but it renders NOTHING for static/off-air -- so the
+  // kiosk (this page) is what's visible then, and it must draw the animated
+  // static itself or the screen is just black. When mpv IS playing it
+  // covers this canvas, so hide it.
+  const canvas = $("#tv-static-canvas");
+  if (st.mode === "static") {
+    const reason = (st.resolution && st.resolution.reason) || "";
+    canvas.classList.remove("hidden");
+    startStaticAnim(canvas, reason === "off_air" ? "OFF AIR" : "STATIC");
+  } else {
+    stopStaticAnim();
+    canvas.classList.add("hidden");
+  }
 }
 TabHandlers.tv = {
   onAction(action) {

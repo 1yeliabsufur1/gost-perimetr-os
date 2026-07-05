@@ -508,6 +508,8 @@ class Telemetry:
         self.derived = {}
         self.connected = False
         self.demo_t0 = time.time()
+        self.obd_status = "idle"
+        self.obd_port = ""
         self.dtc_path = STATE_DIR / "dtcs.json"
         self.dtcs = {}
         if self.dtc_path.exists():
@@ -520,18 +522,40 @@ class Telemetry:
         try:
             import obd
         except ImportError:
+            self.obd_status = "python-obd not installed"
             return False
-        try:
-            import glob
-            ports = glob.glob("/dev/ttyUSB*")
-            self.conn = await asyncio.get_event_loop().run_in_executor(
-                None, lambda: obd.OBD(portstr=ports[0] if ports else None, fast=False, timeout=2)
-            )
-            self.connected = bool(self.conn and self.conn.is_connected())
-        except Exception as e:
-            log("OBD connect failed:", e)
-            self.connected = False
-        return self.connected
+        import glob
+        # ELM327 adapters show up as ttyUSB* (FTDI/CH340) OR ttyACM* (native
+        # USB CDC clones). Try each; fall back to python-obd's own scan.
+        ports = sorted(glob.glob("/dev/ttyUSB*") + glob.glob("/dev/ttyACM*"))
+        candidates = ports if ports else [None]
+        for port in candidates:
+            self.obd_status = f"connecting {port or 'auto-scan'}..."
+            self.obd_port = port or ""
+            log("OBD: trying", port or "auto-scan")
+            try:
+                conn = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda p=port: obd.OBD(portstr=p, fast=False, timeout=3)
+                )
+                if conn and conn.is_connected():
+                    self.conn = conn
+                    self.connected = True
+                    self.obd_status = f"connected {port or conn.port_name()}"
+                    log("OBD: connected on", self.obd_status)
+                    return True
+                # not connected: report the adapter's own status if any
+                st = ""
+                try:
+                    st = str(conn.status()) if conn else ""
+                except Exception:
+                    pass
+                log("OBD: no vehicle link on", port, st)
+            except Exception as e:
+                log("OBD connect error on", port, ":", e)
+        self.connected = False
+        self.obd_status = ("no adapter found (no /dev/ttyUSB* or /dev/ttyACM*)"
+                           if not ports else "adapter found but no vehicle link")
+        return False
 
     async def _query(self, pid_name):
         import obd
@@ -610,6 +634,7 @@ class Telemetry:
         t = time.time() - self.demo_t0
         self.vtype = "ev"
         self.connected = True
+        self.obd_status = "SHOWCASE (simulated telemetry)"
         speed_mph = 35 + 25 * abs(((t / 20) % 2) - 1)
         soc = max(5.0, 82 - (t / 60) * 0.8)
         batt12 = 12.6 + 0.3 * ((t / 13) % 1)
@@ -673,6 +698,8 @@ class Telemetry:
             "values": self.values,
             "derived": self.derived,
             "dtcs": self.dtcs,
+            "obd_status": self.obd_status,
+            "obd_port": self.obd_port,
         }
 
 
@@ -882,16 +909,34 @@ async def wifi_scan():
 
 async def wifi_join(ssid, psk):
     if not ssid:
-        return False
+        return {"ok": False, "detail": "no SSID"}
     try:
+        # Wi-Fi ships rfkill-soft-blocked and the radio may be off; clear both
+        # before connecting or nmcli fails with a useless generic error.
+        for cmd in (["rfkill", "unblock", "wifi"],
+                    ["nmcli", "radio", "wifi", "on"],
+                    ["nmcli", "dev", "wifi", "rescan"]):
+            try:
+                p = await asyncio.create_subprocess_exec(
+                    *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+                await asyncio.wait_for(p.wait(), timeout=15)
+            except Exception:
+                pass
         args = ["nmcli", "dev", "wifi", "connect", ssid]
         if psk:
             args += ["password", psk]
-        proc = await asyncio.create_subprocess_exec(*args)
-        return await proc.wait() == 0
+        proc = await asyncio.create_subprocess_exec(
+            *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=45)
+        detail = (out or b"").decode(errors="ignore").strip()[:200]
+        ok = proc.returncode == 0
+        log("wifi join", ssid, "->", "OK" if ok else "FAIL", detail)
+        return {"ok": ok, "detail": detail}
+    except asyncio.TimeoutError:
+        return {"ok": False, "detail": "timed out (weak signal or wrong password)"}
     except Exception as e:
         log("wifi join failed:", e)
-        return False
+        return {"ok": False, "detail": str(e)}
 
 
 async def set_password(password):
@@ -1066,8 +1111,8 @@ async def route_message(state: GostState, ws, msg):
     elif t == "wifi.scan":
         await ws.send(json.dumps({"type": "wifi.scan", "networks": await wifi_scan()}))
     elif t == "wifi.join":
-        ok = await wifi_join(msg.get("ssid"), msg.get("psk"))
-        await ws.send(json.dumps({"type": "wifi.join", "ok": ok}))
+        res = await wifi_join(msg.get("ssid"), msg.get("psk"))
+        await ws.send(json.dumps({"type": "wifi.join", "ok": res["ok"], "detail": res.get("detail", "")}))
     elif t == "dashcam.set":
         await state.dashcam.set_enabled(bool(msg.get("on")))
     elif t == "power":
