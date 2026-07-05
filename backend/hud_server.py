@@ -540,8 +540,22 @@ class Telemetry:
                 if conn and conn.is_connected():
                     self.conn = conn
                     self.connected = True
-                    self.obd_status = f"connected {port or conn.port_name()}"
-                    log("OBD: connected on", self.obd_status)
+                    proto = ""
+                    nsup = 0
+                    try:
+                        proto = conn.protocol_name() or ""
+                        nsup = len(conn.supported_commands)
+                    except Exception:
+                        pass
+                    self.obd_status = f"connected {port or conn.port_name()} [{proto}, {nsup} PIDs]"
+                    log("OBD: connected", self.obd_status)
+                    # One-time dump of what the truck actually answers -- the
+                    # single most useful diagnostic for "connected but no data".
+                    try:
+                        names = sorted(c.name for c in conn.supported_commands)
+                        log("OBD: supported PIDs:", ", ".join(names))
+                    except Exception:
+                        pass
                     return True
                 # not connected: report the adapter's own status if any
                 st = ""
@@ -549,6 +563,7 @@ class Telemetry:
                     st = str(conn.status()) if conn else ""
                 except Exception:
                     pass
+                self.obd_status = f"adapter on {port} but no ECU link ({st})"
                 log("OBD: no vehicle link on", port, st)
             except Exception as e:
                 log("OBD connect error on", port, ":", e)
@@ -571,16 +586,22 @@ class Telemetry:
             return None
 
     async def poll_fast(self):
+        got = 0
         for pid in FAST_PIDS:
             v = await self._query(pid)
             if v is not None:
                 self.values[pid] = v
+                got += 1
+        return got
 
     async def poll_slow(self):
+        got = 0
         for pid in SLOW_PIDS:
             v = await self._query(pid)
             if v is not None:
                 self.values[pid] = v
+                got += 1
+        return got
 
     async def poll_dtc(self):
         try:
@@ -661,6 +682,7 @@ class Telemetry:
     async def poll_loop(self):
         last_slow = 0.0
         last_dtc = 0.0
+        dead_cycles = 0
         while True:
             try:
                 mode = self.state.config.get("source_mode", "AUTO")
@@ -669,19 +691,41 @@ class Telemetry:
                     await asyncio.sleep(0.2)
                     continue
                 if not self.connected:
+                    # Leaving DEMO or first run: clear any simulated values.
+                    self.values = {}
+                    self.vtype = None
                     ok = await self.connect_obd()
                     if not ok:
-                        self.values = {}
                         await asyncio.sleep(3)
                         continue
-                await self.poll_fast()
+                    dead_cycles = 0
+                got = await self.poll_fast()
                 now = time.time()
                 if now - last_slow > 2:
-                    await self.poll_slow()
+                    got += await self.poll_slow()
                     last_slow = now
                 if now - last_dtc > 30:
                     await self.poll_dtc()
                     last_dtc = now
+                # Unplug / ECU-drop detection: count cycles where NO PID at all
+                # responded (a parked truck still answers speed/rpm=0, so this
+                # only fires on a genuinely dead link, not a stationary one).
+                if got == 0:
+                    dead_cycles += 1
+                    if dead_cycles > 25:  # ~5s of total silence
+                        log("OBD: link went silent, dropping to re-detect")
+                        self.connected = False
+                        try:
+                            self.conn.close()
+                        except Exception:
+                            pass
+                        self.conn = None
+                        self.values = {}
+                        self.obd_status = "link lost -- searching..."
+                        dead_cycles = 0
+                        continue
+                else:
+                    dead_cycles = 0
                 self.detect_vtype()
                 self.derive()
             except Exception as e:
