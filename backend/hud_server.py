@@ -583,21 +583,26 @@ class RawOBD:
         self.ser.reset_input_buffer()
         for cmd, wait in (("ATZ", 1.2), ("ATE0", 0.3), ("ATL0", 0.3),
                           ("ATS0", 0.3), ("ATH0", 0.3),
-                          ("ATSP" + (protocol or "0"), 0.3)):
+                          ("ATSP" + (protocol or "0"), 0.3),
+                          ("ATST64", 0.3)):   # per-request timeout ~400ms
             self._cmd(cmd, wait)
-        self._cmd("0100", 1.0)  # trigger protocol lock / wake the bus
+        # The FIRST query after ATSP triggers the ELM327 protocol search,
+        # which on a live vehicle can take 4-5s and returns "SEARCHING...".
+        # Give it a long read window so the bus actually links before we
+        # judge the connection.
+        self._cmd("0100", 0.5, max_read=8.0)
 
-    def _cmd(self, s, wait=0.25):
+    def _cmd(self, s, wait=0.25, max_read=3.0):
         self.ser.reset_input_buffer()
         self.ser.write((s + "\r").encode())
         time.sleep(wait)
         buf = b""
-        end = time.time() + 2.5
+        end = time.time() + max_read
         while time.time() < end:
             n = self.ser.in_waiting
             if n:
                 buf += self.ser.read(n)
-                if b">" in buf:
+                if b">" in buf:   # ELM327 prompt = response complete
                     break
             else:
                 time.sleep(0.05)
@@ -605,7 +610,7 @@ class RawOBD:
 
     def query_pid(self, req):
         """req like '010C' -> list of data bytes, or None."""
-        resp = self._cmd(req, 0.25)
+        resp = self._cmd(req, 0.2, max_read=5.0)
         up = resp.upper()
         if "NO DATA" in up or "ERROR" in up or "UNABLE" in up or "?" in up:
             return None
@@ -671,14 +676,24 @@ class RawOBD:
 
 
 def _try_raw(port, protocol, baud):
-    """Return a linked RawOBD (RPM answering) or None. Runs in an executor."""
+    """Return a linked RawOBD (RPM OR speed answering) or None. Retries a few
+    times because the bus can need a beat to settle right after the protocol
+    search completes. Runs in an executor."""
+    raw = None
     try:
         raw = RawOBD(port, baud, protocol)
-        if raw.read("RPM") is not None:
-            return raw
+        for _ in range(4):
+            if raw.read("RPM") is not None or raw.read("SPEED") is not None:
+                return raw
+            time.sleep(0.4)
         raw.close()
     except Exception as e:
         log("OBD raw: error", protocol, ":", e)
+        if raw is not None:
+            try:
+                raw.close()
+            except Exception:
+                pass
     return None
 
 # Engine is considered "running" at/above this RPM. Below it (≈0) on a hybrid
