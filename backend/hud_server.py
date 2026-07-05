@@ -67,6 +67,7 @@ DEFAULT_CONFIG = {
     "theme": "gost",
     "guide3": {},
     "dashcam": False,
+    "channel_names": {},
 }
 
 
@@ -977,7 +978,11 @@ class GostState:
         self.podcasts = scan_podcasts()
 
     def channel_summary(self):
-        return {num: {"name": c["name"], "files": [f.name for f in c["files"]]}
+        # User-assigned names (set from the GUIDE tab) override the
+        # folder-derived default; the folder on disk is left untouched.
+        names = self.config.get("channel_names", {}) or {}
+        return {num: {"name": names.get(num, c["name"]),
+                      "files": [f.name for f in c["files"]]}
                 for num, c in self.channels.items()}
 
     def _audio_summary(self, tracks):

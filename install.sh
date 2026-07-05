@@ -15,93 +15,86 @@ GOST_HOME=/opt/gost
 log() { echo "[gost-install] $*"; }
 
 # ---------------------------------------------------------------------------
+# 0. Wait for cloud-init to finish BEFORE looking at users. Pi OS trixie
+#    boots with a temporary 'pi' user and cloud-init RENAMES it to the
+#    userconf.txt name mid-boot. Detecting the user before the rename
+#    finished made a later `chown pi:pi` explode with "invalid user" on
+#    real hardware (2026-07-04) and killed the whole install.
+# ---------------------------------------------------------------------------
+if command -v cloud-init >/dev/null 2>&1; then
+  log "waiting for cloud-init to finish user provisioning..."
+  timeout 180 cloud-init status --wait >/dev/null 2>&1 || true
+fi
+
+# ---------------------------------------------------------------------------
 # 1. Resolve the operator user. The firstboot service runs with NO
-#    SUDO_USER -- never assume it's set. Fall back to the uid-1000 account
-#    that Raspberry Pi Imager / cloud-init creates, then to a fresh 'gost'
-#    user as a last resort.
+#    SUDO_USER -- never assume it's set. Prefer the image's own 'gost'
+#    account (created via boot/userconf.txt), then the uid-1000 account,
+#    then create 'gost' as a last resort.
 # ---------------------------------------------------------------------------
 if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ]; then
   GOST_USER="${SUDO_USER}"
+elif id -u gost >/dev/null 2>&1; then
+  GOST_USER="gost"
 elif getent passwd 1000 >/dev/null 2>&1; then
   GOST_USER="$(getent passwd 1000 | cut -d: -f1)"
 else
   GOST_USER="gost"
-  id -u "$GOST_USER" >/dev/null 2>&1 || useradd -m -s /bin/bash "$GOST_USER"
+  useradd -m -s /bin/bash "$GOST_USER"
 fi
 log "operator user: $GOST_USER"
 echo "$GOST_USER" > /etc/gost-user
+
+# Wi-Fi ships rfkill-soft-blocked on Pi OS until a country is set; unblock
+# here so the wizard's Wi-Fi join actually works.
+rfkill unblock wifi 2>/dev/null || true
+nmcli radio wifi on 2>/dev/null || true
 
 for grp in dialout gpio spi i2c video render seat netdev sudo; do
   getent group "$grp" >/dev/null 2>&1 && usermod -aG "$grp" "$GOST_USER" || true
 done
 
 # ---------------------------------------------------------------------------
-# 2. System packages.
-#    ffmpeg is required for ffprobe (guide durations are real, never assumed).
-#    swig/python3-dev/build-essential/liblgpio-dev are required because the
-#    lgpio wheel gpiozero depends on builds from source on Python 3.13 --
-#    it needs swig AND headers to link against -llgpio.
+# 2 + 3. Dependencies (apt packages + Python venv).
+#
+#    THE BIG WIN: if the image was built "fat" (tools/provision.sh already
+#    ran inside it at build time via qemu ARM chroot), /opt/gost/.provisioned
+#    exists and this ENTIRE block is skipped -- first boot needs NO internet,
+#    NO clock sync, and finishes in seconds. This is what finally kills the
+#    recurring first-boot install failures (network/clock/apt-signature).
+#
+#    On a stock (thin) image or a manual re-run, the block runs normally.
 # ---------------------------------------------------------------------------
 export DEBIAN_FRONTEND=noninteractive
 
-# network-online.target can fire before DHCP actually lands on some trixie
-# setups. Wait up to 5 minutes for real connectivity; if it never comes,
-# apt fails, set -e exits, and the still-enabled firstboot unit simply
-# retries on the next boot -- no half-installed state.
-log "waiting for network..."
-for _ in $(seq 1 60); do
-  if curl -fs --max-time 5 -o /dev/null http://deb.debian.org 2>/dev/null || \
-     ping -c1 -W2 1.1.1.1 >/dev/null 2>&1; then
-    log "network is up"
-    break
-  fi
-  sleep 5
-done
+if [ -f "$GOST_HOME/.provisioned" ]; then
+  log "dependencies already baked into image -- skipping apt/pip (offline first boot)"
+  systemctl enable --now seatd 2>/dev/null || true
+else
+  # network-online.target can fire before DHCP actually lands on some trixie
+  # setups. Wait up to 5 minutes for real connectivity.
+  log "waiting for network..."
+  for _ in $(seq 1 60); do
+    if curl -fs --max-time 5 -o /dev/null http://deb.debian.org 2>/dev/null || \
+       ping -c1 -W2 1.1.1.1 >/dev/null 2>&1; then
+      log "network is up"; break
+    fi
+    sleep 5
+  done
 
-# The Pi has no RTC: on first boot the clock can be hours/days behind, and
-# apt's sqv signature verification then fails with "signature not live
-# until <future time>" and the whole install dies. Wait for NTP sync (up to
-# 3 minutes) before touching apt; proceed anyway after the timeout since a
-# roughly-right clock usually still verifies.
-log "waiting for clock sync (NTP)..."
-for _ in $(seq 1 36); do
-  if [ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" = "yes" ]; then
-    log "clock is synced: $(date)"
-    break
-  fi
-  sleep 5
-done
+  # The Pi has no RTC: on first boot the clock can be behind, and apt's sqv
+  # signature check then fails with "signature not live until <future>".
+  # Wait for NTP sync (up to 3 min) before touching apt.
+  log "waiting for clock sync (NTP)..."
+  for _ in $(seq 1 36); do
+    if [ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" = "yes" ]; then
+      log "clock is synced: $(date)"; break
+    fi
+    sleep 5
+  done
 
-apt-get update
-
-apt-get install -y \
-  python3 python3-venv python3-pip python3-dev \
-  build-essential swig \
-  ffmpeg mpv yt-dlp \
-  cage seatd \
-  network-manager rsync curl git i2c-tools \
-  fonts-dejavu-core fonts-noto-mono
-
-# liblgpio-dev exists on Raspberry Pi OS (needed so the lgpio wheel that
-# gpiozero pulls in can build against -llgpio on Python 3.13) but is NOT in
-# generic Debian's archive -- keep it out of the set -e line above so an
-# x86 VM install (VirtualBox testing, no GPIO anyway) doesn't abort here.
-apt-get install -y liblgpio-dev || \
-  log "WARNING: liblgpio-dev unavailable (non-Pi system?) -- GPIO pad will be disabled, everything else works"
-
-# trixie renamed the chromium package; try both names OUTSIDE the main
-# set -e apt line above so a naming mismatch can never abort the whole install.
-apt-get install -y chromium-browser || apt-get install -y chromium || \
-  log "WARNING: no chromium package found under either name -- kiosk will not start"
-
-systemctl enable --now seatd
-
-# ---------------------------------------------------------------------------
-# 3. Python venv.
-# ---------------------------------------------------------------------------
-[ -d "$GOST_HOME/venv" ] || python3 -m venv "$GOST_HOME/venv"
-"$GOST_HOME/venv/bin/pip" install --upgrade pip
-"$GOST_HOME/venv/bin/pip" install obd websockets gpiozero pyserial
+  bash "$SRC_DIR/tools/provision.sh"
+fi
 
 # ---------------------------------------------------------------------------
 # 4. Copy project tree into place. Never clobber media/ or state/ that a

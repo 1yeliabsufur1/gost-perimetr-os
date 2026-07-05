@@ -431,7 +431,7 @@ const LS = {
 /* ------------------------------- config ---------------------------------- */
 const Config = {
   data: Object.assign({
-    setup_done: false, source_mode: "AUTO", theme: "gost", guide3: {}, dashcam: false,
+    setup_done: false, source_mode: "AUTO", theme: "gost", guide3: {}, dashcam: false, channel_names: {},
   }, LS.get("config", {})),
   save() { LS.set("config", this.data); },
   set(key, value, fromRemote) {
@@ -1057,6 +1057,11 @@ const TV = {
     const dial = fixedChannelDial();
     const real = Net.connected ? (Net.library.channels || {}) : this.demoFiles;
     for (const num of Object.keys(real)) dial[num] = real[num];
+    // User-assigned channel names override the folder-derived default.
+    const names = Config.data.channel_names || {};
+    for (const num of Object.keys(names)) {
+      if (dial[num]) dial[num] = Object.assign({}, dial[num], { name: names[num] });
+    }
     return dial;
   },
   allChans() { return Object.keys(this.channels()).sort((a, b) => Number(a) - Number(b)); },
@@ -1330,7 +1335,15 @@ function renderGuideMain() {
     }
     renderGuideMain(); renderTvChannelList();
   });
-  main.appendChild(el("div", {}, [addBtn, fileInput]));
+  const headerRow = [addBtn, fileInput];
+  if (!isCommercials) {
+    const curName = (TV.channels()[Guide.selectedChan] || {}).name || "CH";
+    const renameBtn = el("button", { "data-focus": "" }, ["[ RENAME CHANNEL ]"]);
+    renameBtn.addEventListener("click", () => renameChannel(Guide.selectedChan, curName));
+    headerRow.push(renameBtn);
+    headerRow.push(el("span", { class: "dim", style: "margin-left:8px;" }, [`CH ${Guide.selectedChan.padStart(2, "0")} -- "${curName}"`]));
+  }
+  main.appendChild(el("div", {}, headerRow));
 
   const files = isCommercials ? TV.commercials : ((TV.demoFiles[Guide.selectedChan] || {}).files || []);
   const fileList = el("div", { style: "margin-top:8px;" });
@@ -1433,6 +1446,27 @@ function removeGuideBlock(chan, day, start) {
     Config.set("guide3", sanitizeGuide3(guide3));
   }
   renderGuideMain();
+}
+
+function renameChannel(chan, currentName) {
+  Modal.open(`NAME CHANNEL ${chan.padStart(2, "0")}`, (body) => {
+    const input = el("input", { type: "text", "data-focus": "", maxlength: "18" });
+    input.value = currentName === "CH" ? "" : currentName;
+    const save = el("button", { "data-focus": "" }, ["[ SAVE ]"]);
+    save.addEventListener("click", () => {
+      const name = (input.value.trim() || "CH").toUpperCase();
+      const names = Object.assign({}, Config.data.channel_names || {});
+      names[chan] = name;
+      Config.set("channel_names", names); // syncs to backend when connected
+      Modal.close();
+      renderGuideChannelList(); renderTvChannelList(); renderGuideMain();
+    });
+    const cancel = el("button", { "data-focus": "" }, ["[ CANCEL ]"]);
+    cancel.addEventListener("click", () => Modal.close());
+    body.appendChild(el("div", {}, ["CHANNEL NAME (MAX 18 CHARS)"]));
+    body.appendChild(input);
+    body.appendChild(el("div", { style: "margin-top:8px;" }, [save, " ", cancel]));
+  });
 }
 
 /* ============================================================================
