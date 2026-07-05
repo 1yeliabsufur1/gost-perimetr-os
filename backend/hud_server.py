@@ -738,6 +738,7 @@ class Telemetry:
         self.demo_t0 = time.time()
         self.obd_status = "idle"
         self.obd_port = ""
+        self.diag_pause = False   # poll loop yields the port during on-screen diag
         self.dtc_path = STATE_DIR / "dtcs.json"
         self.dtcs = {}
         if self.dtc_path.exists():
@@ -761,6 +762,52 @@ class Telemetry:
                 pass
             self.conn = None
         self.use_raw = False
+
+    async def run_diag(self):
+        """On-screen OBD diagnostic: pause polling, sweep protocols with the
+        raw reader, and return human-readable lines showing exactly what the
+        adapter/truck answer -- so the operator can diagnose from the DSI
+        touchscreen without any SSH."""
+        import glob
+        loop = asyncio.get_event_loop()
+        self.diag_pause = True
+        await asyncio.sleep(0.6)   # let poll_loop notice + release the port
+        self._close_obd()
+        try:
+            ports = sorted(glob.glob("/dev/ttyUSB*") + glob.glob("/dev/ttyACM*"))
+            lines = [f"PORTS: {', '.join(ports) if ports else 'NONE FOUND'}"]
+            if not ports:
+                lines.append("No adapter -- check USB cable / it's plugged into OBD.")
+                return "\n".join(lines)
+            port = ports[0]
+            for proto in ("6", "7", "8", None):
+                tag = proto or "auto"
+                await loop.run_in_executor(None, _reset_adapter, port, 115200)
+
+                def probe(pr=proto):
+                    try:
+                        raw = RawOBD(port, 115200, pr)
+                        rpm = raw.read("RPM")
+                        spd = raw.read("SPEED")
+                        r010c = raw._cmd("010C", 0.2, 5.0).replace("\r", " ").strip()
+                        raw.close()
+                        return (rpm, spd, r010c)
+                    except Exception as e:
+                        return (None, None, f"ERROR {e}")
+
+                rpm, spd, r010c = await loop.run_in_executor(None, probe)
+                mark = "  <== WORKS" if rpm is not None else ""
+                lines.append(f"proto {tag}: RPM={rpm} SPEED={spd}{mark}")
+                lines.append(f"   010C raw: {r010c[:46] or '(nothing)'}")
+                if rpm is not None:
+                    lines.append("LINK OK -- set SOURCE=AUTO; DRIVE will show LIVE.")
+                    break
+            else:
+                lines.append("No protocol read the truck. Ensure key is in RUN")
+                lines.append("(engine running). Send this text to Claude.")
+            return "\n".join(lines)
+        finally:
+            self.diag_pause = False
 
     async def connect_obd(self):
         """Try hard to link a real OBDLink/ELM327 adapter across every likely
@@ -1060,6 +1107,13 @@ class Telemetry:
         dead_cycles = 0
         while True:
             try:
+                # On-screen diagnostic owns the port -- stand down.
+                if self.diag_pause:
+                    if self.raw or self.conn:
+                        self._close_obd()
+                    await asyncio.sleep(0.3)
+                    continue
+
                 mode = self.state.config.get("source_mode", "AUTO")
 
                 # Explicit SHOWCASE mode -- always simulated, never real.
@@ -1569,6 +1623,9 @@ async def route_message(state: GostState, ws, msg):
     elif t == "wifi.join":
         res = await wifi_join(msg.get("ssid"), msg.get("psk"))
         await ws.send(json.dumps({"type": "wifi.join", "ok": res["ok"], "detail": res.get("detail", "")}))
+    elif t == "obd.diag":
+        result = await state.telemetry.run_diag()
+        await ws.send(json.dumps({"type": "obd.diag", "result": result}))
     elif t == "dashcam.set":
         await state.dashcam.set_enabled(bool(msg.get("on")))
     elif t == "power":

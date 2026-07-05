@@ -345,6 +345,10 @@ a { color: var(--pri); }
             <button data-focus id="src-auto-btn">AUTO (OBD2)</button>
             <button data-focus id="src-demo-btn">SHOWCASE</button>
           </div>
+          <div class="settings-row">
+            <button data-focus id="obd-diag-btn">[ RUN OBD DIAGNOSTIC ]</button>
+            <span id="obd-diag-status" class="dim"></span>
+          </div>
         </div>
         <div class="frame" data-title="THEME">
           <div class="settings-row" id="theme-swatches"></div>
@@ -637,6 +641,16 @@ const Net = {
     else if (msg.type === "wifi.join") {
       const status = $("#wifi-connect-status");
       if (status) status.textContent = msg.ok ? "CONNECTED" : ("FAILED: " + (msg.detail || "check password"));
+    }
+    else if (msg.type === "obd.diag") {
+      $("#obd-diag-status").textContent = "DONE";
+      Modal.open("OBD DIAGNOSTIC", (body) => {
+        const pre = el("div", { style: "white-space:pre-wrap; font-size:12px; line-height:1.5;" }, [msg.result || "(no result)"]);
+        body.appendChild(pre);
+        const close = el("button", { "data-focus": "" }, ["[ CLOSE ]"]);
+        close.addEventListener("click", () => Modal.close());
+        body.appendChild(el("div", { style: "margin-top:10px;" }, [close]));
+      });
     }
     else if (msg.type === "update.check") { $("#update-result").textContent = msg.ok ? "UP TO DATE" : "CHECK FAILED"; }
     else if (msg.type === "clock.set") { $("#clock-set-result").textContent = msg.ok ? "CLOCK SET" : "FAILED -- CHECK DEVICE LOGS"; }
@@ -2213,6 +2227,11 @@ function buildSettings() {
   $("#src-auto-btn").addEventListener("click", () => setSourceMode("AUTO"));
   $("#src-demo-btn").addEventListener("click", () => setSourceMode("DEMO"));
   $("#wifi-scan-btn").addEventListener("click", () => Wifi.open());
+  $("#obd-diag-btn").addEventListener("click", () => {
+    if (!Net.connected) { $("#obd-diag-status").textContent = "REQUIRES DEVICE"; return; }
+    $("#obd-diag-status").textContent = "RUNNING (10-15s)...";
+    Net.send({ type: "obd.diag" });
+  });
   $("#dashcam-toggle-btn").addEventListener("click", () => {
     const on = $("#dashcam-toggle-btn").textContent === "OFF";
     Config.set("dashcam", on);
