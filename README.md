@@ -40,18 +40,19 @@ keyboard. Runs fully offline after a one-time first-boot install.
 
 ## First boot
 
-**What to expect: the first boot is an INSTALL, not the dashboard.** You'll
-see a banner and scrolling install progress on screen for ~10 minutes (with
-internet connected), then the Pi reboots itself straight into the kiosk.
-Don't power off and don't try to log in while it runs.
+**The prebuilt image is "fat" — all dependencies (cage, Chromium, mpv,
+ffmpeg, the Python environment) are baked in at build time.** So first boot
+needs NO internet and finishes in seconds: `gost-firstboot.service` sees the
+`/opt/gost/.provisioned` marker, skips apt/pip entirely, does a quick
+offline hardware-wiring pass (detect user, template + enable the two
+services, media skeleton, Wi-Fi unblock), and reboots straight into the
+kiosk. No network/clock/apt-signature failure is even possible on this path.
 
-Behind the scenes, `gost-firstboot.service` runs `install.sh` once: it waits
-for network **and for the clock to NTP-sync** (the Pi has no battery clock;
-without this wait, apt rejects repository signatures as "not live until
-<future date>" and the install dies), installs apt packages, builds the
-Python venv, enables the systemd services, lays down the media folder
-skeleton (all channels 03–82 plus music/podcast genre folders), marks itself
-installed, disables itself, and reboots.
+If you instead build a *thin* image (or run `install.sh` on a stock Pi OS),
+the installer waits for network **and for the clock to NTP-sync** — the Pi
+has no battery clock, and without that wait apt rejects repo signatures as
+"not live until \<future date>" and dies — then installs everything online
+(~10 minutes) before its first reboot into the kiosk.
 
 - **Default login:** `gost` / `gost` (pre-seeded — you'll never see Pi OS's
   "create a user" prompt). The kiosk's setup wizard replaces this password
