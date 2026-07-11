@@ -182,9 +182,39 @@ fi
 #      Schedule it detached so this script exits 0 and completes its start
 #      job cleanly, THEN the reboot fires.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# 8b. FINAL VALIDATION -- surface a broken install BEFORE the reboot instead
+#     of booting into a black screen. If anything critical is missing we do
+#     NOT mark .installed, so gost-firstboot retries on the next boot.
+#     (The py_compile check here would have caught a hud_server.py that got
+#     accidentally overwritten with non-Python content.)
+# ---------------------------------------------------------------------------
+log "running final validation..."
+ok=1
+vfail() { log "VALIDATION FAILED: $*"; ok=0; }
+for f in "$GOST_HOME/backend/hud_server.py" "$GOST_HOME/system/kiosk-start.sh" \
+         "/etc/systemd/system/hud-backend.service" "/etc/systemd/system/hud-kiosk.service"; do
+  [ -f "$f" ] || vfail "missing $f"
+done
+[ -x "$GOST_HOME/venv/bin/python3" ] || vfail "python venv missing"
+command -v cage >/dev/null || vfail "cage missing"
+command -v chromium >/dev/null 2>&1 || command -v chromium-browser >/dev/null 2>&1 || vfail "chromium missing"
+"$GOST_HOME/venv/bin/python3" -m py_compile "$GOST_HOME/backend/hud_server.py" 2>/dev/null \
+  || vfail "hud_server.py does not compile as Python"
+systemctl cat hud-backend.service >/dev/null 2>&1 || vfail "hud-backend.service invalid"
+systemctl cat hud-kiosk.service   >/dev/null 2>&1 || vfail "hud-kiosk.service invalid"
+
+if [ "$ok" -ne 1 ]; then
+  log "install INCOMPLETE -- not marking done; firstboot will retry next boot."
+  log "For a console now: Ctrl+Alt+F2."
+  exit 1
+fi
+log "validation OK: backend compiles, venv/chromium/cage/units all present"
+
 touch "$GOST_HOME/.installed"
 
 log "install complete -- rebooting into kiosk in a few seconds"
+sync
 if [ -d /run/systemd/system ] && command -v systemd-run >/dev/null 2>&1; then
   systemd-run --on-active=3 --quiet systemctl reboot || { (sleep 3; reboot) & }
 else

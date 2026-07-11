@@ -1,86 +1,110 @@
 #!/usr/bin/env bash
-# Launches the Wayland kiosk compositor (cage) with Chromium pinned to the
-# GOST frontend. Waits FOREVER for the backend HTTP port -- never bail out on
-# a slow backend, since first-boot hardware bring-up can be slow and a bailed
-# kiosk just dumps the operator onto a bare tty1.
 #
-# NOTHING here fails silently: every state prints to tty1. A crash-loop
-# breaker gives up after too many rapid restarts (exit 42, which the unit's
-# RestartPreventExitStatus honours) so the screen shows help instead of
-# flashing forever -- tty2..tty6 stay usable via Ctrl+Alt+F2.
-set -uo pipefail
+# GOST.OS Kiosk Launcher v2 -- hardened for Raspberry Pi appliance deployment.
+# Features: infinite backend wait, crash-loop detection, safe mode, full
+# logging (file + journal), runtime-dir validation, clean shutdown handling,
+# chromium/cage verification, visible status on tty1, restart-safe design.
+#
+# Exit 42 (safe mode / crash-loop) is honoured by the unit's
+# RestartPreventExitStatus so systemd does NOT restart us -- tty2..tty6 stay
+# usable via Ctrl+Alt+F2.
+set -Eeuo pipefail
 
-LOG=/opt/gost/state/kiosk.log
-mkdir -p /opt/gost/state 2>/dev/null || true
+STATE_DIR="/opt/gost/state"
+LOG="$STATE_DIR/kiosk.log"
+START_FILE="$STATE_DIR/kiosk_starts"
+mkdir -p "$STATE_DIR"
+
+# Full logging: everything to the persistent log AND to stdout (journal).
+exec > >(tee -a "$LOG") 2>&1
 
 say() {
-  local m="GOST: $*"
-  echo "$m"
-  echo "$m" > /dev/tty1 2>/dev/null || true
-  echo "$(date '+%H:%M:%S') $m" >> "$LOG" 2>/dev/null || true
+  local msg="[GOST] $*"
+  echo "$(date '+%F %T') $msg"
+  if [ -w /dev/tty1 ]; then
+    printf "\n%s\n" "$msg" > /dev/tty1 2>/dev/null || true
+  fi
 }
 
-# ---- safe-mode short-circuit (belt-and-suspenders; the unit Condition also
-#      skips us, but if someone starts the service by hand, honour it too) ----
+cleanup() {
+  say "shutdown requested"
+  pkill -f chromium 2>/dev/null || true
+  exit 0
+}
+trap cleanup SIGINT SIGTERM
+
+# ---------------------------- SAFE MODE ------------------------------------
 if [ -e /boot/gost_safe_mode ] || [ -e /boot/firmware/gost_safe_mode ]; then
-  say "SAFE MODE marker present -- not starting kiosk. Use the console (Ctrl+Alt+F2)."
+  say "SAFE MODE ACTIVE -- kiosk disabled. Use Ctrl+Alt+F2 for a console."
   exit 42
 fi
 
-# ---- crash-loop breaker: >6 starts within 120s means something is wrong ----
-CL=/opt/gost/state/kiosk_starts
-now=$(date +%s)
-echo "$now" >> "$CL" 2>/dev/null || true
-# keep only timestamps from the last 120s
-if [ -f "$CL" ]; then
-  awk -v c="$now" '($1 > c-120)' "$CL" > "$CL.tmp" 2>/dev/null && mv "$CL.tmp" "$CL" 2>/dev/null || true
-  recent=$(wc -l < "$CL" 2>/dev/null | tr -d ' ')
-  if [ "${recent:-0}" -gt 6 ]; then
-    say "KIOSK CRASH LOOP DETECTED (${recent} starts/120s) -- stopping."
-    say "Press Ctrl+Alt+F2 for a console.  Retry: sudo systemctl start hud-kiosk"
-    say "Safe boot: touch /boot/gost_safe_mode && sudo reboot"
-    : > "$CL" 2>/dev/null || true
-    sleep 5
-    exit 42   # RestartPreventExitStatus -> systemd will NOT restart us
-  fi
+# ------------------------ CRASH-LOOP PROTECTION ----------------------------
+NOW=$(date +%s)
+echo "$NOW" >> "$START_FILE"
+awk -v now="$NOW" '($1 > now-120)' "$START_FILE" > "${START_FILE}.tmp" 2>/dev/null || true
+mv "${START_FILE}.tmp" "$START_FILE" 2>/dev/null || true
+RECENT=$(wc -l < "$START_FILE" 2>/dev/null || echo 0)
+if [ "${RECENT:-0}" -gt 6 ]; then
+  say "CRASH LOOP DETECTED ($RECENT launches in 120s) -- stopping."
+  say "Recovery: Ctrl+Alt+F2  |  sudo systemctl status hud-kiosk  |  touch /boot/gost_safe_mode"
+  : > "$START_FILE"
+  sleep 10
+  exit 42
 fi
 
-say "kiosk starting -- waiting for backend on 127.0.0.1:8766 ..."
-tries=0
-until curl -fs -o /dev/null "http://127.0.0.1:8766/index.html" 2>/dev/null; do
-  sleep 1
-  tries=$((tries + 1))
-  if [ $((tries % 15)) -eq 0 ]; then
-    say "still waiting for backend (${tries}s) -- check: journalctl -u hud-backend -e"
-  fi
-done
-say "backend is up -- starting display"
-
+# --------------------------- RUNTIME SETUP ---------------------------------
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 mkdir -p "$XDG_RUNTIME_DIR"
+chmod 700 "$XDG_RUNTIME_DIR" 2>/dev/null || true
 export WLR_SEAT="${WLR_SEAT:-seat0}"
 export WLR_LIBINPUT_NO_DEVICES=1
 
+# ---------------------------- DEPENDENCIES ---------------------------------
 CHROMIUM_BIN="$(command -v chromium-browser || command -v chromium || true)"
 if [ -z "$CHROMIUM_BIN" ]; then
-  say "ERROR: no chromium binary -- run: sudo /opt/gost-src/install.sh"
-  sleep 10
+  say "Chromium missing -- run: sudo /opt/gost-src/install.sh"
+  sleep 15
   exit 1
 fi
 if ! command -v cage >/dev/null; then
-  say "ERROR: cage compositor missing -- run: sudo /opt/gost-src/install.sh"
-  sleep 10
+  say "Cage missing -- run: sudo /opt/gost-src/install.sh"
+  sleep 15
   exit 1
 fi
 
-say "launching cage + chromium ($CHROMIUM_BIN)"
+# -------------------------- WAIT FOR BACKEND -------------------------------
+say "waiting for backend on 127.0.0.1:8766 ..."
+SECONDS_WAIT=0
+while ! curl -fs -o /dev/null http://127.0.0.1:8766/index.html 2>/dev/null; do
+  sleep 1
+  SECONDS_WAIT=$((SECONDS_WAIT + 1))
+  if [ $((SECONDS_WAIT % 15)) -eq 0 ]; then
+    say "backend still starting (${SECONDS_WAIT}s) -- check: journalctl -u hud-backend -e"
+  fi
+done
+say "backend online"
+
+# --------------------- PREVENT DUPLICATE INSTANCES -------------------------
+if pgrep -f chromium >/dev/null 2>&1; then
+  say "chromium already running -- clearing before launch"
+  pkill -f chromium || true
+  sleep 2
+fi
+
+# ----------------------------- START KIOSK ---------------------------------
+say "launching GOST UI (cage + $CHROMIUM_BIN)"
 exec cage -- "$CHROMIUM_BIN" \
   --kiosk \
   --app=http://127.0.0.1:8766/index.html \
-  --disable-restore-session-state \
   --disable-session-crashed-bubble \
-  --noerrdialogs \
   --disable-infobars \
+  --disable-restore-session-state \
+  --disable-features=TranslateUI \
+  --noerrdialogs \
   --overscroll-history-navigation=0 \
   --check-for-update-interval=31536000 \
-  --ozone-platform=wayland
+  --enable-gpu \
+  --enable-zero-copy \
+  --ozone-platform=wayland \
+  --password-store=basic

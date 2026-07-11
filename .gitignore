@@ -4,3 +4,6 @@ state/
 .installed
 dist/
 .claude/
+
+# downloaded python-obd source (already baked into the venv; not shipped)
+obd-0.7.3/
