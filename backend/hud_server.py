@@ -581,8 +581,11 @@ class RawOBD:
         self.ser.write(b"\r")
         time.sleep(0.2)
         self.ser.reset_input_buffer()
+        # NOTE: spaces are left ON (no ATS0) -- the response parser tokenises
+        # on whitespace ('41 0C 1A F8'). Sending ATS0 would collapse that to
+        # '410C1AF8' and every read would silently return None.
         for cmd, wait in (("ATZ", 1.2), ("ATE0", 0.3), ("ATL0", 0.3),
-                          ("ATS0", 0.3), ("ATH0", 0.3),
+                          ("ATH0", 0.3),
                           ("ATSP" + (protocol or "0"), 0.3),
                           ("ATST64", 0.3)):   # per-request timeout ~400ms
             self._cmd(cmd, wait)
@@ -608,18 +611,29 @@ class RawOBD:
                 time.sleep(0.05)
         return buf.decode(errors="ignore")
 
+    @staticmethod
+    def _hex_tokens(resp):
+        """Extract 2-hex-char byte tokens from an ELM327 response, robust to
+        whether the adapter has spaces ON ('41 0C 1A F8') or OFF
+        ('410C1AF8') -- long hex runs are chunked into byte pairs."""
+        out = []
+        for t in resp.replace(">", " ").replace("\r", " ").replace("\n", " ").split():
+            if not t or len(t) % 2 or any(c not in "0123456789ABCDEFabcdef" for c in t):
+                continue
+            out.extend(t[i:i + 2].upper() for i in range(0, len(t), 2))
+        return out
+
     def query_pid(self, req):
         """req like '010C' -> list of data bytes, or None."""
         resp = self._cmd(req, 0.2, max_read=5.0)
         up = resp.upper()
-        if "NO DATA" in up or "ERROR" in up or "UNABLE" in up or "?" in up:
+        if "NO DATA" in up or "ERROR" in up or "UNABLE" in up or "STOPPED" in up or "?" in up:
             return None
         resp_mode = "%02X" % (int(req[:2], 16) + 0x40)  # 01 -> 41
         pid_byte = req[2:4].upper()
-        toks = [t for t in resp.replace("\r", " ").replace(">", " ").split()
-                if len(t) == 2 and all(ch in "0123456789ABCDEFabcdef" for ch in t)]
+        toks = self._hex_tokens(resp)
         for i in range(len(toks) - 1):
-            if toks[i].upper() == resp_mode and toks[i + 1].upper() == pid_byte:
+            if toks[i] == resp_mode and toks[i + 1] == pid_byte:
                 try:
                     return [int(x, 16) for x in toks[i + 2:]]
                 except ValueError:
@@ -651,8 +665,7 @@ class RawOBD:
         up = resp.upper()
         if "NO DATA" in up or "ERROR" in up or "UNABLE" in up:
             return []
-        toks = [t for t in resp.replace("\r", " ").replace(">", " ").split()
-                if len(t) == 2 and all(c in "0123456789ABCDEFabcdef" for c in t)]
+        toks = self._hex_tokens(resp)
         try:
             idx = next(i for i, t in enumerate(toks) if t.upper() == "43")
         except StopIteration:
