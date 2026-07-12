@@ -24,6 +24,10 @@ class MockSerial:
 
     def write(self, data):
         cmd = data.decode(errors="ignore").strip().upper()
+        # Strip the ELM327 expected-response-count hint ('010C 1' -> '010C')
+        # that query_pid appends for speed.
+        if cmd and not cmd.startswith("AT"):
+            cmd = cmd.split()[0]
         if cmd == "" or cmd.startswith("AT"):
             self.buf = b"OK\r\r>"
         elif cmd == "0100":

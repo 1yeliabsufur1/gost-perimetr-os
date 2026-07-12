@@ -584,10 +584,14 @@ class RawOBD:
         # NOTE: spaces are left ON (no ATS0) -- the response parser tokenises
         # on whitespace ('41 0C 1A F8'). Sending ATS0 would collapse that to
         # '410C1AF8' and every read would silently return None.
+        # ATST32 (~200ms): halve the adapter's hold-the-line timeout; combined
+        # with the ' 1' expected-response hint in query_pid, per-PID latency
+        # drops from ~600ms to ~50ms => the dashboard updates several times a
+        # second instead of every 2-3s (bailey: "pretty slow on the update").
         for cmd, wait in (("ATZ", 1.2), ("ATE0", 0.3), ("ATL0", 0.3),
                           ("ATH0", 0.3),
                           ("ATSP" + (protocol or "0"), 0.3),
-                          ("ATST64", 0.3)):   # per-request timeout ~400ms
+                          ("ATST32", 0.3)):
             self._cmd(cmd, wait)
         # The FIRST query after ATSP triggers the ELM327 protocol search,
         # which on a live vehicle can take 4-5s and returns "SEARCHING...".
@@ -598,7 +602,8 @@ class RawOBD:
     def _cmd(self, s, wait=0.25, max_read=3.0):
         self.ser.reset_input_buffer()
         self.ser.write((s + "\r").encode())
-        time.sleep(wait)
+        if wait:
+            time.sleep(wait)   # only init commands (ATZ etc.) need a settle
         buf = b""
         end = time.time() + max_read
         while time.time() < end:
@@ -608,7 +613,7 @@ class RawOBD:
                 if b">" in buf:   # ELM327 prompt = response complete
                     break
             else:
-                time.sleep(0.05)
+                time.sleep(0.01)  # tight poll: responses land in tens of ms
         return buf.decode(errors="ignore")
 
     @staticmethod
@@ -624,8 +629,14 @@ class RawOBD:
         return out
 
     def query_pid(self, req):
-        """req like '010C' -> list of data bytes, or None."""
-        resp = self._cmd(req, 0.2, max_read=5.0)
+        """req like '010C' -> list of data bytes, or None.
+
+        The trailing ' 1' is the ELM327 expected-response-count hint: the
+        adapter returns as soon as ONE ECU answers instead of holding the
+        line for the full ATST timeout waiting for more (the truck has 3
+        ECUs echoing each PID; any one of them carries the same value).
+        This is the single biggest latency win: ~600ms -> ~50ms per PID."""
+        resp = self._cmd(req + " 1", 0.0, max_read=2.0)
         up = resp.upper()
         if "NO DATA" in up or "ERROR" in up or "UNABLE" in up or "STOPPED" in up or "?" in up:
             return None

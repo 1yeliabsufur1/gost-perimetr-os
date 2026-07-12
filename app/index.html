@@ -482,7 +482,11 @@ function el(tag, attrs, children) {
     else if (k.startsWith("on")) e.addEventListener(k.slice(2), attrs[k]);
     else e.setAttribute(k, attrs[k]);
   }
-  for (const c of (children || [])) e.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+  // Numbers become text too -- passing a raw number (e.g. Math.round(rpm))
+  // used to throw 'parameter 1 is not of type Node' and ABORT the whole
+  // render mid-grid (live DRIVE tab lost its coolant/12V boxes on device).
+  for (const c of (children || [])) e.appendChild(
+    (typeof c === "string" || typeof c === "number") ? document.createTextNode(String(c)) : c);
   return e;
 }
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
@@ -1017,13 +1021,20 @@ function renderDrive(t) {
   const vtype = t.vtype;
   const hasHvSoc = v.HYBRID_BATTERY_REMAINING != null;
   let socLabel, socVal, rangeVal, energyLabel, energyVal;
-  if (vtype === "ev" || (vtype === "hybrid" && hasHvSoc)) {
+  if (vtype === "ev") {
     socLabel = "STATE OF CHARGE"; socVal = v.HYBRID_BATTERY_REMAINING;
     rangeVal = socVal != null ? Math.round((socVal / 100) * 260) : null;
     energyLabel = "PACK"; energyVal = socVal != null ? (socVal / 100 * 75).toFixed(1) + " kWh" : "--";
+  } else if (vtype === "hybrid") {
+    // PowerBoost accuracy (bailey-confirmed live): the HV pack is ~1.5 kWh --
+    // it is NOT the range driver, the 30.6-gal gas tank is. Showing pack-based
+    // "range"/kWh here produced nonsense (139 MI / 40 kWh from a 53% pack).
+    // HV SOC gets its own honest % box below instead.
+    socLabel = "FUEL LEVEL"; socVal = v.FUEL_LEVEL;
+    const mpg = d.mpg || 21;   // fallback ~= the truck's own lifetime average
+    rangeVal = socVal != null ? Math.round((socVal / 100) * 30.6 * mpg) : null;
+    energyLabel = "ECONOMY"; energyVal = d.mpg != null ? d.mpg.toFixed(1) + " MPG" : (d.drive_mode === "EV" || d.drive_mode === "IDLE-EV" ? "EV" : "--");
   } else {
-    // Gas, or a hybrid (F-150 PowerBoost) whose HV-battery PID Ford doesn't
-    // expose -- use the gas tank + economy, which it does report.
     socLabel = "FUEL LEVEL"; socVal = v.FUEL_LEVEL;
     const mpg = d.mpg || 24;
     rangeVal = socVal != null ? Math.round((socVal / 100) * 26 * mpg) : null;
@@ -1049,6 +1060,11 @@ function renderDrive(t) {
   grid.appendChild(box("RANGE", rangeVal != null ? rangeVal + " MI" : "--"));
   grid.appendChild(box("SPEED", d.mph != null ? Math.round(d.mph) + " MPH" : "--"));
   grid.appendChild(box(energyLabel, energyVal));
+  // Hybrid: the HV pack shown honestly as a percentage of its own (small)
+  // capacity -- no fabricated kWh/range math on a ~1.5 kWh PowerBoost pack.
+  if (vtype === "hybrid" && hasHvSoc) {
+    grid.appendChild(box("HV BATTERY", Math.round(v.HYBRID_BATTERY_REMAINING) + "%"));
+  }
   grid.appendChild(box("RPM", v.RPM != null ? Math.round(v.RPM) : "--"));
   const powerFrac = d.mph != null ? clamp(d.mph / 90, -1, 1) : 0;
   const pbar = el("div", { class: "stat-box", style: "grid-column: span 2;" }, [
