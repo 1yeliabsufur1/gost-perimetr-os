@@ -73,7 +73,10 @@ a { color: var(--pri); }
 }
 
 [data-focus] { outline: none; }
-[data-focus]:focus { outline: 2px solid var(--pri); box-shadow: 0 0 10px var(--glow); background: var(--dim); }
+/* FOCUS (where the cursor is) = bright ring only, no fill -- so it can never
+   be confused with SELECTED (the active setting), which is inverse video. */
+[data-focus]:focus { outline: 2px solid var(--pri); box-shadow: 0 0 10px var(--glow); }
+.selected, .selected:focus { background: var(--pri) !important; color: var(--bg) !important; text-shadow: none; }
 
 /* ============================== SCREENS ============================== */
 .screen { position: fixed; inset: 0; display: flex; flex-direction: column; }
@@ -2295,9 +2298,9 @@ function setSourceMode(mode) {
   updateSourceButtons();
 }
 function updateSourceButtons() {
-  $("#src-auto-btn").classList.toggle("alarm", false);
-  $("#src-auto-btn").style.background = Config.data.source_mode === "AUTO" ? "var(--dim)" : "";
-  $("#src-demo-btn").style.background = Config.data.source_mode === "DEMO" ? "var(--dim)" : "";
+  // Inverse-video .selected marks the ACTIVE mode; cursor focus is a ring.
+  $("#src-auto-btn").classList.toggle("selected", Config.data.source_mode === "AUTO");
+  $("#src-demo-btn").classList.toggle("selected", Config.data.source_mode === "DEMO");
 }
 function renderAbout(info) {
   LastInfo.data = info;
