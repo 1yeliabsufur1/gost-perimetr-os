@@ -873,7 +873,10 @@ class Telemetry:
                 self.live = True
                 self.obd_linked = True
                 rpm0 = raw.read("RPM")
-                self.obd_status = f"LIVE {port} raw proto {proto or 'auto'} [RPM={rpm0}]"
+                # NOTE: no live values baked into this string -- it's shown on
+                # the DRIVE banner and a frozen "[RPM=0.0]" from connect time
+                # reads like a stuck gauge (bailey saw exactly that).
+                self.obd_status = f"LIVE {port} raw proto {proto or 'auto'}"
                 log("OBD: CONNECTED (raw) --", self.obd_status)
                 try:
                     (STATE_DIR / "obd.json").write_text(json.dumps(
@@ -959,7 +962,7 @@ class Telemetry:
                         proto_name = conn.protocol_name() or ""
                     except Exception:
                         pass
-                    self.obd_status = f"LIVE {port} @ {baud} [{proto_name}, RPM={rpm_val}]"
+                    self.obd_status = f"LIVE {port} @ {baud} [{proto_name}]"
                     log("OBD: CONNECTED --", self.obd_status)
                     # Remember this working combo for instant reconnect next boot.
                     try:

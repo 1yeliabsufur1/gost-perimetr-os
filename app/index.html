@@ -117,7 +117,6 @@ a { color: var(--pri); }
 .home-item .desc { display:block; font-size: 12px; color: var(--dim); margin-top: 2px; }
 
 /* ---- DRIVE ---- */
-#drive-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
 .stat-box { border: 1px solid var(--line); padding: 10px; }
 .stat-box .label { font-size: 11px; color: var(--dim); }
 .stat-box .value { font-size: 28px; }
@@ -140,7 +139,7 @@ a { color: var(--pri); }
 .gauge .bar { font-size: 18px; letter-spacing: -1px; }
 .gauge .num { font-size: 20px; }
 #hud-status-line { margin-top: 10px; font-size: 13px; border-top: 1px solid var(--line); padding-top: 6px; }
-#dtc-panel .dtc-row { display:flex; justify-content:space-between; border-bottom: 1px dashed var(--line); padding: 4px 0; font-size: 13px; }
+.dtc-row { display:flex; justify-content:space-between; border-bottom: 1px dashed var(--line); padding: 4px 0; font-size: 13px; }
 
 /* ---- TV ---- */
 /* min-height:0 + overflow:hidden on the flex chain is required so the
@@ -267,19 +266,29 @@ a { color: var(--pri); }
         </div>
       </section>
 
+      <!-- DRIVE = the diagnostics side (bailey): codes, link details, raw
+           readouts, on-screen diagnostic. Driving info lives on HUD. -->
       <section id="tab-drive" class="tab">
-        <div class="frame" data-title="DRIVE" style="height:100%;">
+        <div class="frame" data-title="DRIVE // DIAGNOSTICS" style="height:100%; overflow-y:auto;">
           <div id="drive-notconnected" class="hidden">*** NOT CONNECTED ***</div>
           <div id="drive-live-banner"></div>
-          <div id="drive-grid"></div>
+          <div class="frame" data-title="OBD LINK"><div id="drive-link-box" class="dim" style="font-size:13px;"></div></div>
+          <div class="frame" data-title="TROUBLE CODES"><div id="drive-dtc-box" style="font-size:13px;"></div></div>
+          <div class="frame" data-title="LIVE DATA (RAW PIDS)"><div id="drive-raw-box" style="font-size:12px; font-family:inherit;"></div></div>
+          <div style="margin-top:8px;">
+            <button data-focus id="drive-diag-btn">[ RUN OBD DIAGNOSTIC ]</button>
+            <span id="drive-diag-status" class="dim"></span>
+          </div>
         </div>
       </section>
 
+      <!-- HUD = the driving screen (bailey): big speed, engine/battery mode,
+           fuel + range, live gauges. -->
       <section id="tab-hud" class="tab">
+        <div id="hud-mode" class="glow" style="text-align:center; font-size:20px; letter-spacing:2px; min-height:26px;"></div>
         <div id="hud-speed-wrap"></div>
         <div id="hud-gauges"></div>
         <div id="hud-status-line"></div>
-        <div class="frame hidden" data-title="DTC" id="dtc-panel"></div>
       </section>
 
       <section id="tab-tv" class="tab">
@@ -650,7 +659,7 @@ const Net = {
       if (status) status.textContent = msg.ok ? "CONNECTED" : ("FAILED: " + (msg.detail || "check password"));
     }
     else if (msg.type === "obd.diag") {
-      $("#obd-diag-status").textContent = "DONE";
+      if (window.setDiagStatus) window.setDiagStatus("DONE");
       Modal.open("OBD DIAGNOSTIC", (body) => {
         const pre = el("div", { style: "white-space:pre-wrap; font-size:12px; line-height:1.5;" }, [msg.result || "(no result)"]);
         body.appendChild(pre);
@@ -715,7 +724,8 @@ const Demo = {
         COOLANT_TEMP: 68 + 5 * ((t / 30) % 1), CONTROL_MODULE_VOLTAGE: batt12,
         BAROMETRIC_PRESSURE: 101.3, HYBRID_BATTERY_REMAINING: soc,
       },
-      derived: { mph: speedMph, boost_psi: 0, mpg: null, coolant_f: (68 + 5 * ((t / 30) % 1)) * 9 / 5 + 32, oil_f: null },
+      derived: { mph: speedMph, boost_psi: 0, mpg: null, coolant_f: (68 + 5 * ((t / 30) % 1)) * 9 / 5 + 32, oil_f: null,
+                 drive_mode: speedMph > 1 ? "EV" : "IDLE-EV" },
       dtcs: this.dtcs,
     };
     Net.telemetry = msg;
@@ -1017,63 +1027,49 @@ function renderDrive(t) {
     if (t.live) { banner.textContent = "● LIVE — OBDLink  " + (t.obd_status || ""); banner.className = "live"; }
     else { banner.textContent = "◌ SHOWCASE (simulated) — " + (t.obd_status || "no OBD link"); banner.className = "sim"; }
   }
-  const v = t.values || {}, d = t.derived || {};
-  const vtype = t.vtype;
-  const hasHvSoc = v.HYBRID_BATTERY_REMAINING != null;
-  let socLabel, socVal, rangeVal, energyLabel, energyVal;
-  if (vtype === "ev") {
-    socLabel = "STATE OF CHARGE"; socVal = v.HYBRID_BATTERY_REMAINING;
-    rangeVal = socVal != null ? Math.round((socVal / 100) * 260) : null;
-    energyLabel = "PACK"; energyVal = socVal != null ? (socVal / 100 * 75).toFixed(1) + " kWh" : "--";
-  } else if (vtype === "hybrid") {
-    // PowerBoost accuracy (bailey-confirmed live): the HV pack is ~1.5 kWh --
-    // it is NOT the range driver, the 30.6-gal gas tank is. Showing pack-based
-    // "range"/kWh here produced nonsense (139 MI / 40 kWh from a 53% pack).
-    // HV SOC gets its own honest % box below instead.
-    socLabel = "FUEL LEVEL"; socVal = v.FUEL_LEVEL;
-    const mpg = d.mpg || 21;   // fallback ~= the truck's own lifetime average
-    rangeVal = socVal != null ? Math.round((socVal / 100) * 30.6 * mpg) : null;
-    energyLabel = "ECONOMY"; energyVal = d.mpg != null ? d.mpg.toFixed(1) + " MPG" : (d.drive_mode === "EV" || d.drive_mode === "IDLE-EV" ? "EV" : "--");
-  } else {
-    socLabel = "FUEL LEVEL"; socVal = v.FUEL_LEVEL;
-    const mpg = d.mpg || 24;
-    rangeVal = socVal != null ? Math.round((socVal / 100) * 26 * mpg) : null;
-    energyLabel = "ECONOMY"; energyVal = d.mpg != null ? d.mpg.toFixed(1) + " MPG" : (d.drive_mode === "EV" ? "EV" : "--");
+  // --- DIAGNOSTICS VIEW (bailey: "the drive tab should show the codes and
+  // diagnostics side of things") -- link details, trouble codes, raw PIDs.
+  const v = t.values || {};
+  const link = $("#drive-link-box");
+  if (link) {
+    link.textContent = "STATUS: " + (t.obd_status || "--") +
+      (t.obd_port ? "\nPORT:   " + t.obd_port : "");
+    link.style.whiteSpace = "pre-wrap";
   }
-  const grid = $("#drive-grid");
-  grid.innerHTML = "";
-  const box = (label, value, extraClass) => el("div", { class: "stat-box" + (extraClass ? " " + extraClass : "") }, [
-    el("div", { class: "label" }, [label]), el("div", { class: "value glow" }, [value]),
-  ]);
-  // DRIVE MODE up top for hybrids/EVs -- the engine-vs-battery state, derived
-  // from RPM+speed, so the PowerBoost's switching is visible at a glance.
-  if (d.drive_mode && vtype !== "gas") {
-    const onBattery = d.drive_mode === "EV" || d.drive_mode === "IDLE-EV";
-    grid.appendChild(el("div", { class: "stat-box", style: "grid-column: span 2;" }, [
-      el("div", { class: "label" }, ["DRIVE MODE"]),
-      el("div", { class: "value glow", style: onBattery ? "color:var(--ok, #4fe38a);" : "" },
-        [onBattery ? "⚡ BATTERY" : "⛽ ENGINE"]),
-      el("div", { class: "label" }, [d.drive_mode]),
-    ]));
+  const dtcBox = $("#drive-dtc-box");
+  if (dtcBox) {
+    dtcBox.innerHTML = "";
+    const dtcs = t.dtcs || {};
+    const codes = Object.entries(dtcs);
+    if (!codes.length) {
+      dtcBox.appendChild(el("div", { class: "dim" }, ["NO STORED CODES -- ALL CLEAR"]));
+    } else {
+      codes.forEach(([code, info]) => {
+        dtcBox.appendChild(el("div", { class: "dtc-row" }, [
+          el("span", { class: "glow" }, [code + (info.desc ? " -- " + info.desc : "")]),
+          el("span", { class: "dim" }, [" first seen " + (info.first_seen || "?").slice(0, 16).replace("T", " ")]),
+        ]));
+      });
+    }
   }
-  grid.appendChild(box(socLabel, socVal != null ? Math.round(socVal) + "%" : "--"));
-  grid.appendChild(box("RANGE", rangeVal != null ? rangeVal + " MI" : "--"));
-  grid.appendChild(box("SPEED", d.mph != null ? Math.round(d.mph) + " MPH" : "--"));
-  grid.appendChild(box(energyLabel, energyVal));
-  // Hybrid: the HV pack shown honestly as a percentage of its own (small)
-  // capacity -- no fabricated kWh/range math on a ~1.5 kWh PowerBoost pack.
-  if (vtype === "hybrid" && hasHvSoc) {
-    grid.appendChild(box("HV BATTERY", Math.round(v.HYBRID_BATTERY_REMAINING) + "%"));
+  // Raw PID table: every value the truck is actually answering, unrounded --
+  // this is the "is the sensor lying or is the display lying" screen.
+  const rawBox = $("#drive-raw-box");
+  if (rawBox) {
+    rawBox.innerHTML = "";
+    const keys = Object.keys(v).sort();
+    if (!keys.length) {
+      rawBox.appendChild(el("div", { class: "dim" }, ["(no PID answers yet)"]));
+    } else {
+      keys.forEach((k) => {
+        const val = v[k];
+        rawBox.appendChild(el("div", {}, [
+          k.padEnd(26, ".") + " " + (typeof val === "number" ? val.toFixed(1) : String(val)),
+        ]));
+      });
+      rawBox.style.whiteSpace = "pre";
+    }
   }
-  grid.appendChild(box("RPM", v.RPM != null ? Math.round(v.RPM) : "--"));
-  const powerFrac = d.mph != null ? clamp(d.mph / 90, -1, 1) : 0;
-  const pbar = el("div", { class: "stat-box", style: "grid-column: span 2;" }, [
-    el("div", { class: "label" }, ["POWER / REGEN"]),
-    el("div", { class: "pbar" }, [el("div", { class: "fill", style: `width:${Math.abs(powerFrac) * 50}%; ${powerFrac >= 0 ? "left:50%" : `right:50%`}` })]),
-  ]);
-  grid.appendChild(pbar);
-  grid.appendChild(box("COOLANT", d.coolant_f != null ? Math.round(d.coolant_f) + " F" : "--"));
-  grid.appendChild(box("12V BATT", v.CONTROL_MODULE_VOLTAGE != null ? v.CONTROL_MODULE_VOLTAGE.toFixed(1) + " V" : "--"));
 }
 
 /* ============================================================================
@@ -1081,7 +1077,10 @@ function renderDrive(t) {
  * ========================================================================== */
 const HudGhost = { history: [] };
 function renderHud(t) {
+  // --- DRIVING VIEW (bailey: "the hud is where the driving information
+  // should be") -- big speed, engine/battery mode, fuel + range, gauges.
   const v = (t && t.values) || {}, d = (t && t.derived) || {};
+  const vtype = t && t.vtype;
   const speed = d.mph != null ? Math.round(d.mph) : null;
   HudGhost.history.push(speed);
   if (HudGhost.history.length > 6) HudGhost.history.shift();
@@ -1094,17 +1093,50 @@ function renderHud(t) {
     wrap.appendChild(el("div", { class: "ghost" + (age === 0 ? " glow" : ""), style: `opacity:${op};` }, [String(s)]));
   });
 
-  const vtype = t && t.vtype;
-  const socOrFuel = vtype === "gas" ? (v.FUEL_LEVEL != null ? v.FUEL_LEVEL : null) : v.HYBRID_BATTERY_REMAINING;
-  const socLabel = vtype === "gas" ? "FUEL LEVEL" : "HV SOC";
-  const gauges = [
-    ["RPM", v.RPM, 0, 7000, fmt0(v.RPM)],
-    ["BOOST PSI", d.boost_psi, 0, 20, fmt1(d.boost_psi)],
-    [socLabel, socOrFuel, 0, 100, fmt0(socOrFuel) + "%"],
-    ["COOLANT F", d.coolant_f, 100, 260, fmt0(d.coolant_f)],
-    ["OIL F", d.oil_f, 100, 300, fmt0(d.oil_f)],
-    ["12V BATT", v.CONTROL_MODULE_VOLTAGE, 10, 15, fmt1(v.CONTROL_MODULE_VOLTAGE)],
-  ];
+  // Engine-vs-battery badge above the speed (moved here from DRIVE): the
+  // PowerBoost's switching, visible while actually driving.
+  const modeEl = $("#hud-mode");
+  if (modeEl) {
+    if (d.drive_mode && vtype !== "gas") {
+      const onBattery = d.drive_mode === "EV" || d.drive_mode === "IDLE-EV";
+      modeEl.textContent = onBattery ? "⚡ BATTERY" : "⛽ ENGINE";
+      modeEl.style.color = onBattery ? "var(--ok, #4fe38a)" : "";
+    } else {
+      modeEl.textContent = "";
+    }
+  }
+
+  // Gauge set follows the vehicle: a hybrid's driving info is fuel + the HV
+  // pack's own %, not a fake big-battery SOC. (PowerBoost pack is ~1.5 kWh;
+  // OBD reports ABSOLUTE pack SOC, which hybrids hold mid-range by design.)
+  const fuel = v.FUEL_LEVEL, hv = v.HYBRID_BATTERY_REMAINING;
+  let gauges;
+  if (vtype === "hybrid") {
+    gauges = [
+      ["RPM", v.RPM, 0, 7000, fmt0(v.RPM)],
+      ["FUEL LEVEL", fuel, 0, 100, fmt0(fuel) + "%"],
+      ["HV PACK", hv, 0, 100, fmt0(hv) + "%"],
+      ["COOLANT F", d.coolant_f, 100, 260, fmt0(d.coolant_f)],
+      ["12V BATT", v.CONTROL_MODULE_VOLTAGE, 10, 15, fmt1(v.CONTROL_MODULE_VOLTAGE)],
+      ["BOOST PSI", d.boost_psi, 0, 20, fmt1(d.boost_psi)],
+    ];
+  } else if (vtype === "ev") {
+    gauges = [
+      ["STATE OF CHARGE", hv, 0, 100, fmt0(hv) + "%"],
+      ["SPEED MPH", d.mph, 0, 120, fmt0(d.mph)],
+      ["COOLANT F", d.coolant_f, 100, 260, fmt0(d.coolant_f)],
+      ["12V BATT", v.CONTROL_MODULE_VOLTAGE, 10, 15, fmt1(v.CONTROL_MODULE_VOLTAGE)],
+    ];
+  } else {
+    gauges = [
+      ["RPM", v.RPM, 0, 7000, fmt0(v.RPM)],
+      ["FUEL LEVEL", fuel, 0, 100, fmt0(fuel) + "%"],
+      ["BOOST PSI", d.boost_psi, 0, 20, fmt1(d.boost_psi)],
+      ["COOLANT F", d.coolant_f, 100, 260, fmt0(d.coolant_f)],
+      ["OIL F", d.oil_f, 100, 300, fmt0(d.oil_f)],
+      ["12V BATT", v.CONTROL_MODULE_VOLTAGE, 10, 15, fmt1(v.CONTROL_MODULE_VOLTAGE)],
+    ];
+  }
   const gwrap = $("#hud-gauges");
   gwrap.innerHTML = "";
   gauges.forEach(([label, val, min, max, numStr]) => {
@@ -1117,24 +1149,20 @@ function renderHud(t) {
     ]));
   });
 
-  const dtcs = (t && t.dtcs) || {};
-  const dtcCount = Object.keys(dtcs).length;
-  const mpgTxt = d.mpg != null ? d.mpg.toFixed(1) + " MPG" : "EV";
-  $("#hud-status-line").textContent =
-    `SRC: ${srcModeLabel(t && t.source_mode)}  //  ${mpgTxt}  //  DTC: ${dtcCount}`;
-
-  const panel = $("#dtc-panel");
-  panel.classList.toggle("hidden", dtcCount === 0);
-  if (dtcCount) {
-    panel.innerHTML = '<div data-title-placeholder></div>';
-    panel.setAttribute("data-title", "DTC");
-    Object.entries(dtcs).forEach(([code, info]) => {
-      panel.appendChild(el("div", { class: "dtc-row" }, [
-        el("span", {}, [code + " -- " + (info.desc || "")]),
-        el("span", { class: "dim" }, [info.first_seen || ""]),
-      ]));
-    });
+  // Status line: range from the fuel tank (30.6 gal PowerBoost), live MPG,
+  // and the DTC count -- code DETAILS live on the DRIVE tab now.
+  const dtcCount = Object.keys((t && t.dtcs) || {}).length;
+  const mpg = d.mpg;
+  let rangeTxt = "--";
+  if (fuel != null && vtype !== "ev") {
+    const tank = vtype === "hybrid" ? 30.6 : 26;
+    rangeTxt = Math.round((fuel / 100) * tank * (mpg || 21)) + " MI";
+  } else if (vtype === "ev" && hv != null) {
+    rangeTxt = Math.round((hv / 100) * 260) + " MI";
   }
+  const mpgTxt = mpg != null ? mpg.toFixed(1) + " MPG" : (d.drive_mode === "EV" || d.drive_mode === "IDLE-EV" ? "EV" : "--");
+  $("#hud-status-line").textContent =
+    `SRC: ${srcModeLabel(t && t.source_mode)}  //  RANGE ${rangeTxt}  //  ${mpgTxt}  //  DTC: ${dtcCount}`;
 }
 
 /* ============================================================================
@@ -2246,11 +2274,21 @@ function buildSettings() {
   $("#src-auto-btn").addEventListener("click", () => setSourceMode("AUTO"));
   $("#src-demo-btn").addEventListener("click", () => setSourceMode("DEMO"));
   $("#wifi-scan-btn").addEventListener("click", () => Wifi.open());
-  $("#obd-diag-btn").addEventListener("click", () => {
-    if (!Net.connected) { $("#obd-diag-status").textContent = "REQUIRES DEVICE"; return; }
-    $("#obd-diag-status").textContent = "RUNNING (10-15s)...";
+  // The diagnostic runs from Settings AND from the DRIVE tab (bailey: DRIVE
+  // is the diagnostics screen). Same backend call; both status spans update.
+  const setDiagStatus = (txt) => {
+    for (const id of ["#obd-diag-status", "#drive-diag-status"]) {
+      const s = $(id); if (s) s.textContent = txt;
+    }
+  };
+  const startDiag = () => {
+    if (!Net.connected) { setDiagStatus("REQUIRES DEVICE"); return; }
+    setDiagStatus("RUNNING (10-15s)...");
     Net.send({ type: "obd.diag" });
-  });
+  };
+  window.setDiagStatus = setDiagStatus;
+  $("#obd-diag-btn").addEventListener("click", startDiag);
+  $("#drive-diag-btn").addEventListener("click", startDiag);
   $("#dashcam-toggle-btn").addEventListener("click", () => {
     const on = $("#dashcam-toggle-btn").textContent === "OFF";
     Config.set("dashcam", on);
