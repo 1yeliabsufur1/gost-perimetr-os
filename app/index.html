@@ -388,8 +388,10 @@ a { color: var(--pri); }
       <!-- TERM = on-device shell in theme: map downloads, backend tweaks,
            no SSH needed. Line-mode (no vim/nano). -->
       <section id="tab-term" class="tab">
-        <div class="frame" data-title="TERMINAL // GOST SHELL" style="height:100%; display:flex; flex-direction:column;">
-          <pre id="term-out" style="flex:1; overflow-y:auto; margin:0; font-size:12px; white-space:pre-wrap; text-align:left;"></pre>
+        <div class="frame" data-title="TERMINAL // GOST SHELL" style="height:100%; box-sizing:border-box; display:flex; flex-direction:column;">
+          <!-- min-height:0 lets the scrollback SHRINK inside the flex column;
+               without it long output pushes the input+hint under the tab bar. -->
+          <pre id="term-out" style="flex:1; min-height:0; overflow-y:auto; margin:0; font-size:12px; white-space:pre-wrap; text-align:left;"></pre>
           <div style="display:flex; gap:6px; align-items:center; border-top:1px dashed var(--line); padding-top:6px;">
             <span class="glow">&gt;</span>
             <input id="term-in" data-focus style="flex:1;" autocomplete="off" spellcheck="false" placeholder="command...">
