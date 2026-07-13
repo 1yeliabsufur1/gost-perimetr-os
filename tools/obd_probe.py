@@ -13,12 +13,24 @@ Run from the TERM tab (or SSH):
       candidates) plus a modest range, log every non-empty response WITH its
       ECU header. One-shot; safe with the engine on or off.
 
-  sudo gost-obd-probe capture <label> <seconds>
+  sudo gost-obd-probe capture <label> <seconds> [init]
       Monitor ALL bus traffic (headers on) for <seconds>, timestamped. Do an
       action during the window. Run it twice to diff, e.g.:
           sudo gost-obd-probe capture doors-closed 15
           # ... open the driver door ...
           sudo gost-obd-probe capture driver-door-open 15
+
+      [init] is an OPTIONAL semicolon-separated list of AT/ST commands sent
+      before monitoring, so you can pick the bus WITHOUT reflashing. Ford
+      doors are usually on MS-CAN, not the default HS-CAN. Both OBDLink EX and
+      MX+ (STN chips) can switch. Try, in order, whichever gives changing
+      bytes when a door opens:
+          # default = HS-CAN (500k), no init needed
+          sudo gost-obd-probe capture door-open-hs 15
+          # Ford MS-CAN (125k) via the STN user protocol:
+          sudo gost-obd-probe capture door-open-ms 15 "STP53;ATH1;ATMA"
+      The log records each init command's reply, so we can see if the bus
+      switch took ('OK' vs '?') -- send it back either way.
 
 Then connect the SD card to a PC and copy the logs from the boot drive:
   <BOOT>/gost-obd/*.log     (the small FAT drive Windows shows on insert)
@@ -163,7 +175,7 @@ def do_sweep():
         start_backend()
 
 
-def do_capture(label, secs):
+def do_capture(label, secs, init_cmds=None):
     port = find_port()
     if not port:
         print("no adapter found"); return
@@ -172,27 +184,40 @@ def do_capture(label, secs):
         s, baud = open_serial(port)
         if not s:
             print("could not open", port); return
-        init(s, headers=True)
         safe = "".join(c for c in label if c.isalnum() or c in "-_") or "capture"
         path = os.path.join(boot_log_dir(),
                             "%s-%d.log" % (safe, int(time.time())))
+        f = open(path, "w")
+        f.write("# gost-obd-probe capture '%s'  port=%s baud=%s  %s\n"
+                % (label, port, baud, time.strftime("%Y-%m-%d %H:%M:%S")))
+        already_monitoring = False
+        if init_cmds:
+            # Custom bus/init sequence (e.g. MS-CAN). Log each reply so we can
+            # see whether the switch took ('OK' vs '?').
+            f.write("# custom init: %s\n" % init_cmds)
+            for c in [x.strip() for x in init_cmds.split(";") if x.strip()]:
+                r = cmd(s, c, 0.2, 3.0).replace("\r", " ").strip()
+                f.write("# %s -> %s\n" % (c, r))
+                if c.upper().replace(" ", "") in ("ATMA", "STMA"):
+                    already_monitoring = True
+        else:
+            init(s, headers=True)
         print("CAPTURING %ds -> do the action now..." % secs)
-        s.reset_input_buffer()
-        s.write(b"ATMA\r")   # monitor all frames
+        if not already_monitoring:
+            s.reset_input_buffer()
+            s.write(b"ATMA\r")   # monitor all frames
         t0 = time.time()
-        with open(path, "w") as f:
-            f.write("# gost-obd-probe capture '%s'  port=%s baud=%s  %s\n"
-                    % (label, port, baud, time.strftime("%Y-%m-%d %H:%M:%S")))
-            while time.time() - t0 < secs:
-                n = s.in_waiting
-                if n:
-                    chunk = s.read(n).decode(errors="replace")
-                    for ln in chunk.replace("\r", "\n").split("\n"):
-                        ln = ln.strip()
-                        if ln and ln != ">":
-                            f.write("%.3f %s\n" % (time.time() - t0, ln))
-                else:
-                    time.sleep(0.005)
+        while time.time() - t0 < secs:
+            n = s.in_waiting
+            if n:
+                chunk = s.read(n).decode(errors="replace")
+                for ln in chunk.replace("\r", "\n").split("\n"):
+                    ln = ln.strip()
+                    if ln and ln != ">":
+                        f.write("%.3f %s\n" % (time.time() - t0, ln))
+            else:
+                time.sleep(0.005)
+        f.close()
         cmd(s, "", 0.1)   # any char stops ATMA
         s.close()
         print("WROTE:", path)
@@ -209,7 +234,8 @@ def main():
     elif a[0] == "sweep":
         do_sweep()
     elif a[0] == "capture" and len(a) >= 3:
-        do_capture(a[1], max(3, min(120, int(a[2]))))
+        do_capture(a[1], max(3, min(120, int(a[2]))),
+                   a[3] if len(a) >= 4 else None)
     else:
         print(__doc__)
 
