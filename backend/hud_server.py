@@ -1272,6 +1272,7 @@ class Telemetry:
             "obd_status": self.obd_status,
             "obd_port": self.obd_port,
             "doors": getattr(self, "doors", None),
+            "carplay": carplay_dongle(),
         }
 
 
@@ -1521,6 +1522,45 @@ async def wifi_join(ssid, psk):
     except Exception as e:
         log("wifi join failed:", e)
         return {"ok": False, "detail": str(e)}
+
+
+# Carlinkit-style CarPlay/Android Auto dongles (CPC200-CCPA etc.) enumerate
+# as USB vendor 0x1314. The CARPLAY tab only appears when one is plugged in;
+# the projection stack itself is a future round (needs the dongle to test).
+_CARPLAY_CACHE = {"t": 0.0, "info": None}
+
+
+def carplay_dongle():
+    now = time.time()
+    if now - _CARPLAY_CACHE["t"] < 10:
+        return _CARPLAY_CACHE["info"]
+    info = None
+    try:
+        base = "/sys/bus/usb/devices"
+        for d in os.listdir(base):
+            vp = os.path.join(base, d, "idVendor")
+            if not os.path.isfile(vp):
+                continue
+            try:
+                with open(vp) as f:
+                    vid = f.read().strip().lower()
+                if vid != "1314":
+                    continue
+                with open(os.path.join(base, d, "idProduct")) as f:
+                    pid = f.read().strip()
+                name = "Carlinkit dongle"
+                np = os.path.join(base, d, "product")
+                if os.path.isfile(np):
+                    with open(np) as f:
+                        name = f.read().strip() or name
+                info = {"vid": vid, "pid": pid, "name": name}
+                break
+            except Exception:
+                continue
+    except Exception:
+        pass
+    _CARPLAY_CACHE.update(t=now, info=info)
+    return info
 
 
 class TermSession:

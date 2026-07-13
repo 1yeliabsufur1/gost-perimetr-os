@@ -9,3 +9,8 @@ __GOST_USER__ ALL=(root) NOPASSWD: /usr/local/sbin/gost-power
 # ("Not authorized to control networking" -- seen on hardware 2026-07-12), so
 # the backend falls back to sudo for exactly these network commands.
 __GOST_USER__ ALL=(root) NOPASSWD: /usr/bin/nmcli, /usr/sbin/rfkill
+# Appliance policy (bailey 2026-07-12): the operator owns this box -- no
+# password prompts for sudo, in the TERM tab or a shell. This general grant
+# supersedes the specific lines above but they stay as documentation of what
+# the backend actually calls.
+__GOST_USER__ ALL=(ALL) NOPASSWD: ALL

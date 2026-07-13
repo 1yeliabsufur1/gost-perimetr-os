@@ -3,6 +3,11 @@ Description=GOST/PERIMETR OS first-boot self-installer (runs once, then disables
 After=network-online.target
 Wants=network-online.target
 ConditionPathExists=!/opt/gost/.installed
+# Kill the tty1 login prompt during install -- getty was painting
+# "raspberrypi login:" straight over our progress banner, which reads as
+# "the OS is broken" (bailey's photos 2026-07-12). The kiosk unit has its
+# own Conflicts=getty@tty1 for every boot after this one.
+Conflicts=getty@tty1.service
 
 [Service]
 Type=oneshot

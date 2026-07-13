@@ -325,6 +325,19 @@ a { color: var(--pri); }
         </div>
       </section>
 
+      <!-- CARPLAY: only in the tab bar while a Carlinkit dongle is on USB. -->
+      <section id="tab-carplay" class="tab">
+        <div class="frame" data-title="CARPLAY // ANDROID AUTO" style="height:100%; text-align:center;">
+          <div style="margin-top:40px;" class="glow" id="carplay-name">--</div>
+          <div class="dim" style="margin-top:14px; font-size:13px; max-width:560px; margin-left:auto; margin-right:auto;">
+            DONGLE DETECTED AND READY TO WIRE UP. The projection stack (video +
+            touch passthrough) ships in an upcoming update -- pair your phone to
+            the dongle's own Bluetooth/Wi-Fi in the meantime so it's ready.
+          </div>
+          <div class="dim" style="margin-top:10px; font-size:11px;" id="carplay-ids"></div>
+        </div>
+      </section>
+
       <section id="tab-tv" class="tab">
         <div id="tv-layout">
           <div class="frame" data-title="CHANNELS" id="tv-channels-wrap" style="width:220px;">
@@ -506,11 +519,14 @@ a { color: var(--pri); }
  * over ws://127.0.0.1:8765 + http://127.0.0.1:8766.
  * =========================================================================== */
 
-const TABS = ["home","drive","hud","vehicle","tv","guide","music","nav","term","settings"];
+const TABS = ["home","drive","hud","vehicle","carplay","tv","guide","music","nav","term","settings"];
 const TAB_LABELS = {
-  home:"HOME", drive:"DRIVE", hud:"HUD", vehicle:"VEHICLE", tv:"TV", guide:"GUIDE",
-  music:"MUSIC", nav:"NAV", term:"TERM", settings:"SETTINGS",
+  home:"HOME", drive:"DRIVE", hud:"HUD", vehicle:"VEHICLE", carplay:"CARPLAY", tv:"TV",
+  guide:"GUIDE", music:"MUSIC", nav:"NAV", term:"TERM", settings:"SETTINGS",
 };
+// CARPLAY only exists while a Carlinkit dongle is plugged in (backend scans USB).
+let CarplayInfo = null;
+function visibleTabs() { return TABS.filter(t => t !== "carplay" || CarplayInfo); }
 const THEMES = [
   {id:"gost", name:"GOST AMBER"}, {id:"perimetr", name:"PERIMETR RED"},
   {id:"fosfor", name:"FOSFOR GREEN"}, {id:"argon", name:"ARGON CYAN"},
@@ -709,7 +725,20 @@ const Net = {
     Demo.start();
   },
   route(msg) {
-    if (msg.type === "telemetry") { this.telemetry = msg; renderDrive(msg); renderHud(msg); renderVehicle(msg); }
+    if (msg.type === "telemetry") {
+      this.telemetry = msg; renderDrive(msg); renderHud(msg); renderVehicle(msg);
+      // CARPLAY tab appears/disappears with the physical dongle.
+      if (!!msg.carplay !== !!CarplayInfo) {
+        CarplayInfo = msg.carplay || null;
+        buildTabbar();
+        if (!CarplayInfo && State.tab === "carplay") setTab("home");
+      }
+      if (CarplayInfo) {
+        const n = $("#carplay-name"), i = $("#carplay-ids");
+        if (n) n.textContent = CarplayInfo.name || "CARLINKIT DONGLE";
+        if (i) i.textContent = "USB " + (CarplayInfo.vid || "?") + ":" + (CarplayInfo.pid || "?");
+      }
+    }
     else if (msg.type === "library") {
       this.library = msg;
       renderTvChannelList(); renderGuideChannelList();
@@ -842,9 +871,10 @@ function moveFocus(delta) {
   list[idx].focus();
 }
 function switchTab(delta) {
-  let idx = TABS.indexOf(State.tab);
-  idx = (idx + delta + TABS.length) % TABS.length;
-  setTab(TABS[idx]);
+  const tabs = visibleTabs();
+  let idx = tabs.indexOf(State.tab);
+  idx = (idx + delta + tabs.length) % tabs.length;
+  setTab(tabs[idx]);
 }
 function handleAction(action) {
   if (action === "back_hold") { universalBack(); return; }
@@ -1067,7 +1097,7 @@ const LastInfo = { data: { version: "3.0.0", hostname: "unknown" } };
 function buildTabbar() {
   const bar = $("#tabbar");
   bar.innerHTML = "";
-  for (const t of TABS) {
+  for (const t of visibleTabs()) {
     bar.appendChild(el("button", { "data-tab": t, onclick: () => setTab(t) }, [TAB_LABELS[t]]));
   }
 }
@@ -1079,6 +1109,7 @@ function buildHome() {
     drive: "Diagnostics -- OBD link, trouble codes, raw PIDs",
     hud: "Driving screen -- speed, mode, fuel, range, gauges",
     vehicle: "Body status -- doors, hood, tailgate diagram",
+    carplay: "Phone projection -- Carlinkit dongle detected",
     tv: "Broadcast-simulation channels 3-82 + YouTube",
     guide: "Program the station -- schedule blocks per weekday",
     music: "Music & podcasts -- keeps playing across all tabs",
@@ -1086,7 +1117,7 @@ function buildHome() {
     term: "On-screen shell -- map downloads, tweaks, no SSH",
     settings: "Source, Wi-Fi, Bluetooth, units, themes, updates",
   };
-  for (const t of TABS.filter(x => x !== "home")) {
+  for (const t of visibleTabs().filter(x => x !== "home")) {
     list.appendChild(el("button", { class: "home-item", "data-focus": "", onclick: () => setTab(t) }, [
       TAB_LABELS[t], el("span", { class: "desc" }, [descs[t]]),
     ]));

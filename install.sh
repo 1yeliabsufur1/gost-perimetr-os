@@ -49,6 +49,12 @@ echo "$GOST_USER" > /etc/gost-user
 # here so the wizard's Wi-Fi join actually works.
 rfkill unblock wifi 2>/dev/null || true
 rfkill unblock bluetooth 2>/dev/null || true   # BT pairing UI + wireless OBD
+
+# Identity: this is a GOST head unit, not a stock "raspberrypi".
+if [ "$(hostname)" != "gost" ]; then
+  hostnamectl set-hostname gost 2>/dev/null || echo gost > /etc/hostname
+  sed -i 's/\braspberrypi\b/gost/g' /etc/hosts 2>/dev/null || true
+fi
 nmcli radio wifi on 2>/dev/null || true
 
 for grp in dialout gpio spi i2c video render seat netdev sudo; do
