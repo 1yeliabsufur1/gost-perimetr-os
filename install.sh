@@ -48,6 +48,7 @@ echo "$GOST_USER" > /etc/gost-user
 # Wi-Fi ships rfkill-soft-blocked on Pi OS until a country is set; unblock
 # here so the wizard's Wi-Fi join actually works.
 rfkill unblock wifi 2>/dev/null || true
+rfkill unblock bluetooth 2>/dev/null || true   # BT pairing UI + wireless OBD
 nmcli radio wifi on 2>/dev/null || true
 
 for grp in dialout gpio spi i2c video render seat netdev sudo; do
@@ -134,6 +135,21 @@ sed "s/__GOST_USER__/$GOST_USER/g" "$GOST_HOME/system/sudoers-gost" > "$SUDOERS_
 visudo -c -f "$SUDOERS_TMP"
 install -m 440 -o root -g root "$SUDOERS_TMP" /etc/sudoers.d/gost
 rm -f "$SUDOERS_TMP"
+
+# NetworkManager polkit: without this, nmcli from the kiosk backend fails
+# with "Not authorized to control networking" (seen on hardware 2026-07-12)
+# even with the user in netdev -- polkit checks the *session*, and a systemd
+# service has no seat/session. Grant the operator user NM control directly.
+mkdir -p /etc/polkit-1/rules.d
+cat > /etc/polkit-1/rules.d/50-gost-networkmanager.rules <<POLKIT
+polkit.addRule(function(action, subject) {
+    if (action.id.indexOf("org.freedesktop.NetworkManager.") === 0 &&
+        subject.user === "$GOST_USER") {
+        return polkit.Result.YES;
+    }
+});
+POLKIT
+systemctl try-restart polkit 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
 # 6. systemd units (User= is templated per-install since it depends on the

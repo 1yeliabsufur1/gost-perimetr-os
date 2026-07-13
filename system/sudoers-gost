@@ -5,3 +5,7 @@
 __GOST_USER__ ALL=(root) NOPASSWD: /usr/local/sbin/gost-setpass
 __GOST_USER__ ALL=(root) NOPASSWD: /usr/local/sbin/gost-settime
 __GOST_USER__ ALL=(root) NOPASSWD: /usr/local/sbin/gost-power
+# Wi-Fi from the kiosk UI: NetworkManager's polkit denies the service user
+# ("Not authorized to control networking" -- seen on hardware 2026-07-12), so
+# the backend falls back to sudo for exactly these network commands.
+__GOST_USER__ ALL=(root) NOPASSWD: /usr/bin/nmcli, /usr/sbin/rfkill

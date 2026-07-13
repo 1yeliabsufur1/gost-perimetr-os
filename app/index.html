@@ -46,6 +46,14 @@ a { color: var(--pri); }
 .hidden { display: none !important; }
 .glow { text-shadow: 0 0 4px var(--glow), 0 0 14px var(--glow); }
 .dim { color: var(--dim); }
+/* VEHICLE tab: CRT-outline truck; ajar parts fill + swing open. */
+.veh-body, .veh-line { fill: none; stroke: var(--dim); stroke-width: 2; }
+.veh-part { fill: none; stroke: var(--pri); stroke-width: 2.5; transition: transform .4s, fill .3s; transform-box: fill-box; }
+.veh-part.open { fill: var(--pri); filter: drop-shadow(0 0 8px var(--glow)); }
+.door-l.open { transform: rotate(-35deg); transform-origin: top right; }
+.door-r.open { transform: rotate(35deg); transform-origin: top left; }
+#veh-hood.open { transform: rotate(-12deg); transform-origin: bottom center; }
+#veh-trunk.open { transform: rotate(12deg); transform-origin: top center; }
 
 /* CRT scanline + vignette overlay */
 #crt-overlay {
@@ -291,6 +299,32 @@ a { color: var(--pri); }
         <div id="hud-status-line"></div>
       </section>
 
+      <!-- VEHICLE = body status: top-down truck, doors/hood/tailgate light
+           up + swing open when ajar. -->
+      <section id="tab-vehicle" class="tab">
+        <div class="frame" data-title="VEHICLE STATUS" style="height:100%; text-align:center;">
+          <div id="veh-banner" class="dim" style="font-size:12px; margin:4px 0;"></div>
+          <svg id="veh-svg" viewBox="0 0 300 470" style="height:72%; max-width:100%;">
+            <!-- body -->
+            <rect x="70" y="30" width="160" height="410" rx="30" class="veh-body"/>
+            <!-- windshield / rear glass -->
+            <line x1="80" y1="150" x2="220" y2="150" class="veh-line"/>
+            <line x1="80" y1="330" x2="220" y2="330" class="veh-line"/>
+            <rect x="95" y="160" width="110" height="60" rx="8" class="veh-line"/>
+            <!-- hood / frunk -->
+            <path id="veh-hood" class="veh-part" d="M80 40 Q150 20 220 40 L220 120 L80 120 Z"/>
+            <!-- doors -->
+            <rect id="veh-fl" class="veh-part door-l" x="52" y="160" width="18" height="80" rx="4"/>
+            <rect id="veh-rl" class="veh-part door-l" x="52" y="250" width="18" height="80" rx="4"/>
+            <rect id="veh-fr" class="veh-part door-r" x="230" y="160" width="18" height="80" rx="4"/>
+            <rect id="veh-rr" class="veh-part door-r" x="230" y="250" width="18" height="80" rx="4"/>
+            <!-- trunk / tailgate -->
+            <rect id="veh-trunk" class="veh-part" x="80" y="400" width="140" height="34" rx="6"/>
+          </svg>
+          <div id="veh-open-list" class="glow" style="font-size:15px; min-height:20px;"></div>
+        </div>
+      </section>
+
       <section id="tab-tv" class="tab">
         <div id="tv-layout">
           <div class="frame" data-title="CHANNELS" id="tv-channels-wrap" style="width:220px;">
@@ -351,6 +385,19 @@ a { color: var(--pri); }
         </div>
       </section>
 
+      <!-- TERM = on-device shell in theme: map downloads, backend tweaks,
+           no SSH needed. Line-mode (no vim/nano). -->
+      <section id="tab-term" class="tab">
+        <div class="frame" data-title="TERMINAL // GOST SHELL" style="height:100%; display:flex; flex-direction:column;">
+          <pre id="term-out" style="flex:1; overflow-y:auto; margin:0; font-size:12px; white-space:pre-wrap; text-align:left;"></pre>
+          <div style="display:flex; gap:6px; align-items:center; border-top:1px dashed var(--line); padding-top:6px;">
+            <span class="glow">&gt;</span>
+            <input id="term-in" data-focus style="flex:1;" autocomplete="off" spellcheck="false" placeholder="command...">
+          </div>
+          <div class="dim" style="font-size:10px;">LINE-MODE SHELL ON THE DEVICE -- fine for apt / wget / map downloads; no vim/nano (use cat/sed). UP/DOWN = history.</div>
+        </div>
+      </section>
+
       <section id="tab-settings" class="tab">
         <div class="frame" data-title="SOURCE">
           <div class="settings-row">
@@ -361,6 +408,25 @@ a { color: var(--pri); }
             <button data-focus id="obd-diag-btn">[ RUN OBD DIAGNOSTIC ]</button>
             <span id="obd-diag-status" class="dim"></span>
           </div>
+        </div>
+        <div class="frame" data-title="UNITS">
+          <div class="settings-row">
+            <span class="dim">TEMPERATURE:</span>
+            <button data-focus id="unit-f-btn">°F</button>
+            <button data-focus id="unit-c-btn">°C</button>
+          </div>
+          <div class="settings-row">
+            <span class="dim">ECONOMY:</span>
+            <button data-focus id="unit-mpg-btn">MPG</button>
+            <button data-focus id="unit-kml-btn">KM/L</button>
+          </div>
+        </div>
+        <div class="frame" data-title="BLUETOOTH">
+          <div class="settings-row">
+            <button data-focus id="bt-scan-btn">[ SCAN ]</button>
+            <span id="bt-status" class="dim"></span>
+          </div>
+          <div id="bt-list"></div>
         </div>
         <div class="frame" data-title="THEME">
           <div class="settings-row" id="theme-swatches"></div>
@@ -440,10 +506,10 @@ a { color: var(--pri); }
  * over ws://127.0.0.1:8765 + http://127.0.0.1:8766.
  * =========================================================================== */
 
-const TABS = ["home","drive","hud","tv","guide","music","nav","settings"];
+const TABS = ["home","drive","hud","vehicle","tv","guide","music","nav","term","settings"];
 const TAB_LABELS = {
-  home:"HOME", drive:"DRIVE", hud:"HUD", tv:"TV", guide:"GUIDE",
-  music:"MUSIC", nav:"NAV", settings:"SETTINGS",
+  home:"HOME", drive:"DRIVE", hud:"HUD", vehicle:"VEHICLE", tv:"TV", guide:"GUIDE",
+  music:"MUSIC", nav:"NAV", term:"TERM", settings:"SETTINGS",
 };
 const THEMES = [
   {id:"gost", name:"GOST AMBER"}, {id:"perimetr", name:"PERIMETR RED"},
@@ -643,7 +709,7 @@ const Net = {
     Demo.start();
   },
   route(msg) {
-    if (msg.type === "telemetry") { this.telemetry = msg; renderDrive(msg); renderHud(msg); }
+    if (msg.type === "telemetry") { this.telemetry = msg; renderDrive(msg); renderHud(msg); renderVehicle(msg); }
     else if (msg.type === "library") {
       this.library = msg;
       renderTvChannelList(); renderGuideChannelList();
@@ -667,6 +733,28 @@ const Net = {
         close.addEventListener("click", () => Modal.close());
         body.appendChild(el("div", { style: "margin-top:10px;" }, [close]));
       });
+    }
+    else if (msg.type === "term.out") {
+      // Strip ANSI escape sequences -- the CRT theme IS the styling.
+      Term.print(String(msg.data || "").replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, ""));
+    }
+    else if (msg.type === "bt.scan") {
+      const devs = msg.devices || [];
+      $("#bt-status").textContent = devs.length + " FOUND -- select to pair";
+      const list = $("#bt-list");
+      list.innerHTML = "";
+      devs.forEach((d) => {
+        const b = el("button", { "data-focus": "", style: "display:block; width:100%; text-align:left; margin:2px 0;" },
+          [d.name + "  [" + d.mac + "]"]);
+        b.addEventListener("click", () => {
+          $("#bt-status").textContent = "PAIRING " + d.name + "...";
+          Net.send({ type: "bt.pair", mac: d.mac });
+        });
+        list.appendChild(b);
+      });
+    }
+    else if (msg.type === "bt.pair") {
+      $("#bt-status").textContent = msg.ok ? "PAIRED + TRUSTED" : "FAILED: " + (msg.detail || "");
     }
     else if (msg.type === "update.check") { $("#update-result").textContent = msg.ok ? "UP TO DATE" : "CHECK FAILED"; }
     else if (msg.type === "clock.set") { $("#clock-set-result").textContent = msg.ok ? "CLOCK SET" : "FAILED -- CHECK DEVICE LOGS"; }
@@ -729,7 +817,9 @@ const Demo = {
       dtcs: this.dtcs,
     };
     Net.telemetry = msg;
-    renderDrive(msg); renderHud(msg);
+    msg.doors = (function(){ const c = Math.floor(t / 6) % 8;
+      return { fl: c === 1, fr: c === 3, rl: false, rr: false, hood: c === 5, trunk: c === 7 }; })();
+    renderDrive(msg); renderHud(msg); renderVehicle(msg);
   },
 };
 
@@ -986,13 +1076,15 @@ function buildHome() {
   const list = $("#home-list");
   list.innerHTML = "";
   const descs = {
-    drive: "Live EV/gas telemetry -- SOC, range, power, temps",
-    hud: "Instrument cluster -- speed, RPM, boost, DTC codes",
+    drive: "Diagnostics -- OBD link, trouble codes, raw PIDs",
+    hud: "Driving screen -- speed, mode, fuel, range, gauges",
+    vehicle: "Body status -- doors, hood, tailgate diagram",
     tv: "Broadcast-simulation channels 3-82 + YouTube",
     guide: "Program the station -- schedule blocks per weekday",
     music: "Music & podcasts -- keeps playing across all tabs",
     nav: "Offline MapLibre/PMTiles maps with GPS puck",
-    settings: "Source mode, Wi-Fi, themes, dashcam, updates",
+    term: "On-screen shell -- map downloads, tweaks, no SSH",
+    settings: "Source, Wi-Fi, Bluetooth, units, themes, updates",
   };
   for (const t of TABS.filter(x => x !== "home")) {
     list.appendChild(el("button", { class: "home-item", "data-focus": "", onclick: () => setTab(t) }, [
@@ -1032,8 +1124,10 @@ function renderDrive(t) {
   const v = t.values || {};
   const link = $("#drive-link-box");
   if (link) {
+    const veh = t.vtype && t.vtype !== "unknown" ? "\nVEHICLE: " + t.vtype.toUpperCase() +
+      (v.FUEL_TYPE != null ? " (ECU fuel-type code " + Math.round(v.FUEL_TYPE) + ")" : " (detected)") : "";
     link.textContent = "STATUS: " + (t.obd_status || "--") +
-      (t.obd_port ? "\nPORT:   " + t.obd_port : "");
+      (t.obd_port ? "\nPORT:   " + t.obd_port : "") + veh;
     link.style.whiteSpace = "pre-wrap";
   }
   const dtcBox = $("#drive-dtc-box");
@@ -1061,10 +1155,18 @@ function renderDrive(t) {
     if (!keys.length) {
       rawBox.appendChild(el("div", { class: "dim" }, ["(no PID answers yet)"]));
     } else {
+      // Native ECU units, labeled -- this table is deliberately unconverted
+      // (the truck speaks Celsius/km/h/kPa); the HUD applies the Settings
+      // units toggle, this shows what the sensors actually said.
+      const RAW_UNITS = { RPM: "rpm", SPEED: "km/h", COOLANT_TEMP: "°C",
+        OIL_TEMP: "°C", FUEL_LEVEL: "%", HYBRID_BATTERY_REMAINING: "%",
+        CONTROL_MODULE_VOLTAGE: "V", INTAKE_PRESSURE: "kPa",
+        BAROMETRIC_PRESSURE: "kPa", MAF: "g/s", FUEL_TYPE: "SAE code" };
       keys.forEach((k) => {
         const val = v[k];
         rawBox.appendChild(el("div", {}, [
-          k.padEnd(26, ".") + " " + (typeof val === "number" ? val.toFixed(1) : String(val)),
+          k.padEnd(26, ".") + " " + (typeof val === "number" ? val.toFixed(1) : String(val)) +
+          (RAW_UNITS[k] ? " " + RAW_UNITS[k] : ""),
         ]));
       });
       rawBox.style.whiteSpace = "pre";
@@ -1097,7 +1199,7 @@ function renderHud(t) {
   // PowerBoost's switching, visible while actually driving.
   const modeEl = $("#hud-mode");
   if (modeEl) {
-    if (d.drive_mode && vtype !== "gas") {
+    if (d.drive_mode && (vtype === "hybrid" || vtype === "ev")) {
       const onBattery = d.drive_mode === "EV" || d.drive_mode === "IDLE-EV";
       modeEl.textContent = onBattery ? "⚡ BATTERY" : "⛽ ENGINE";
       modeEl.style.color = onBattery ? "var(--ok, #4fe38a)" : "";
@@ -1110,13 +1212,20 @@ function renderHud(t) {
   // pack's own %, not a fake big-battery SOC. (PowerBoost pack is ~1.5 kWh;
   // OBD reports ABSOLUTE pack SOC, which hybrids hold mid-range by design.)
   const fuel = v.FUEL_LEVEL, hv = v.HYBRID_BATTERY_REMAINING;
+  // Temperatures follow the Settings units toggle (raw PIDs are Celsius;
+  // derived *_f are the Fahrenheit conversions).
+  const tC = unitTemp() === "C";
+  const coolG = ["COOLANT " + (tC ? "C" : "F"), tC ? v.COOLANT_TEMP : d.coolant_f,
+                 tC ? 40 : 100, tC ? 127 : 260, fmt0(tC ? v.COOLANT_TEMP : d.coolant_f)];
+  const oilG = ["OIL " + (tC ? "C" : "F"), tC ? v.OIL_TEMP : d.oil_f,
+                tC ? 40 : 100, tC ? 149 : 300, fmt0(tC ? v.OIL_TEMP : d.oil_f)];
   let gauges;
   if (vtype === "hybrid") {
     gauges = [
       ["RPM", v.RPM, 0, 7000, fmt0(v.RPM)],
       ["FUEL LEVEL", fuel, 0, 100, fmt0(fuel) + "%"],
       ["HV PACK", hv, 0, 100, fmt0(hv) + "%"],
-      ["COOLANT F", d.coolant_f, 100, 260, fmt0(d.coolant_f)],
+      coolG,
       ["12V BATT", v.CONTROL_MODULE_VOLTAGE, 10, 15, fmt1(v.CONTROL_MODULE_VOLTAGE)],
       ["BOOST PSI", d.boost_psi, 0, 20, fmt1(d.boost_psi)],
     ];
@@ -1124,16 +1233,17 @@ function renderHud(t) {
     gauges = [
       ["STATE OF CHARGE", hv, 0, 100, fmt0(hv) + "%"],
       ["SPEED MPH", d.mph, 0, 120, fmt0(d.mph)],
-      ["COOLANT F", d.coolant_f, 100, 260, fmt0(d.coolant_f)],
+      coolG,
       ["12V BATT", v.CONTROL_MODULE_VOLTAGE, 10, 15, fmt1(v.CONTROL_MODULE_VOLTAGE)],
     ];
   } else {
+    // gas AND diesel: same instrument set (diesels are boosted too)
     gauges = [
       ["RPM", v.RPM, 0, 7000, fmt0(v.RPM)],
       ["FUEL LEVEL", fuel, 0, 100, fmt0(fuel) + "%"],
       ["BOOST PSI", d.boost_psi, 0, 20, fmt1(d.boost_psi)],
-      ["COOLANT F", d.coolant_f, 100, 260, fmt0(d.coolant_f)],
-      ["OIL F", d.oil_f, 100, 300, fmt0(d.oil_f)],
+      coolG,
+      oilG,
       ["12V BATT", v.CONTROL_MODULE_VOLTAGE, 10, 15, fmt1(v.CONTROL_MODULE_VOLTAGE)],
     ];
   }
@@ -1153,21 +1263,70 @@ function renderHud(t) {
   // and the DTC count -- code DETAILS live on the DRIVE tab now.
   const dtcCount = Object.keys((t && t.dtcs) || {}).length;
   const mpg = d.mpg;
-  let rangeTxt = "--";
+  let rangeMi = null;
   if (fuel != null && vtype !== "ev") {
     const tank = vtype === "hybrid" ? 30.6 : 26;
-    rangeTxt = Math.round((fuel / 100) * tank * (mpg || 21)) + " MI";
+    rangeMi = (fuel / 100) * tank * (mpg || 21);
   } else if (vtype === "ev" && hv != null) {
-    rangeTxt = Math.round((hv / 100) * 260) + " MI";
+    rangeMi = (hv / 100) * 260;
   }
-  const mpgTxt = mpg != null ? mpg.toFixed(1) + " MPG" : (d.drive_mode === "EV" || d.drive_mode === "IDLE-EV" ? "EV" : "--");
+  const econ = econTxt(mpg) || (d.drive_mode === "EV" || d.drive_mode === "IDLE-EV" ? "EV" : "--");
+  const vehTxt = vtype && vtype !== "unknown" ? "  //  VEH: " + vtype.toUpperCase() : "";
   $("#hud-status-line").textContent =
-    `SRC: ${srcModeLabel(t && t.source_mode)}  //  RANGE ${rangeTxt}  //  ${mpgTxt}  //  DTC: ${dtcCount}`;
+    `SRC: ${srcModeLabel(t && t.source_mode)}${vehTxt}  //  RANGE ${rangeTxt(rangeMi)}  //  ${econ}  //  DTC: ${dtcCount}`;
 }
 
 /* ============================================================================
- * TV TAB
+ * VEHICLE TAB -- body status diagram (doors/hood/tailgate)
  * ========================================================================== */
+const VEH_NAMES = { fl: "DRIVER DOOR", fr: "PASSENGER DOOR", rl: "REAR LEFT DOOR",
+  rr: "REAR RIGHT DOOR", hood: "HOOD/FRUNK", trunk: "TRUNK/TAILGATE" };
+function renderVehicle(t) {
+  const banner = $("#veh-banner"), list = $("#veh-open-list");
+  if (!banner) return;
+  const doors = t && t.doors;
+  const open = [];
+  for (const p of Object.keys(VEH_NAMES)) {
+    const part = $("#veh-" + p);
+    const isOpen = !!(doors && doors[p]);
+    if (part) part.classList.toggle("open", isOpen);
+    if (isOpen) open.push(VEH_NAMES[p]);
+  }
+  if (!doors) {
+    // Standard OBD has no door PIDs -- Ford exposes them via BCM-specific
+    // mode-22 requests we haven't mapped yet. Honest placeholder until then.
+    banner.textContent = t && t.live
+      ? "DOOR STATUS NOT AVAILABLE YET -- needs Ford body-control PIDs (in the works)"
+      : "SHOWCASE: door status animates; live data needs body-control PIDs";
+    list.textContent = "";
+  } else {
+    banner.textContent = "";
+    list.textContent = open.length ? "⚠ OPEN: " + open.join("  //  ") : "ALL CLOSED // SECURE";
+  }
+}
+
+/* ============================================================================
+ * TERM TAB -- line-mode shell on the device, streamed over the backend WS
+ * ========================================================================== */
+const Term = {
+  history: [], hIdx: -1,
+  print(s) {
+    const pre = $("#term-out");
+    if (!pre) return;
+    pre.textContent = (pre.textContent + s).split("\n").slice(-500).join("\n");
+    pre.scrollTop = pre.scrollHeight;
+  },
+  submit() {
+    const inp = $("#term-in");
+    const cmd = inp.value;
+    inp.value = "";
+    if (!cmd.trim()) return;
+    this.history.push(cmd); this.hIdx = this.history.length;
+    this.print("> " + cmd + "\n");
+    if (!Net.connected) { this.print("[REQUIRES DEVICE -- the shell runs on the Pi]\n"); return; }
+    Net.send({ type: "term.input", data: cmd });
+  },
+};
 /** Every channel 3-82 always exists, like a real tuner dial -- empty ones just
  * show OFF AIR until GUIDE puts something on them. Fixes the "no channels"
  * empty-list problem: there's always something to look at and tune to. */
@@ -2273,6 +2432,12 @@ function buildSettings() {
   });
   $("#src-auto-btn").addEventListener("click", () => setSourceMode("AUTO"));
   $("#src-demo-btn").addEventListener("click", () => setSourceMode("DEMO"));
+  const setUnit = (key, val) => { Config.set(key, val); updateUnitButtons(); };
+  $("#unit-f-btn").addEventListener("click", () => setUnit("units_temp", "F"));
+  $("#unit-c-btn").addEventListener("click", () => setUnit("units_temp", "C"));
+  $("#unit-mpg-btn").addEventListener("click", () => setUnit("units_econ", "MPG"));
+  $("#unit-kml-btn").addEventListener("click", () => setUnit("units_econ", "KML"));
+  updateUnitButtons();
   $("#wifi-scan-btn").addEventListener("click", () => Wifi.open());
   // The diagnostic runs from Settings AND from the DRIVE tab (bailey: DRIVE
   // is the diagnostics screen). Same backend call; both status spans update.
@@ -2289,6 +2454,23 @@ function buildSettings() {
   window.setDiagStatus = setDiagStatus;
   $("#obd-diag-btn").addEventListener("click", startDiag);
   $("#drive-diag-btn").addEventListener("click", startDiag);
+  $("#term-in").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); Term.submit(); }
+    else if (e.key === "ArrowUp" && Term.history.length) {
+      e.preventDefault();
+      Term.hIdx = Math.max(0, Term.hIdx - 1);
+      e.target.value = Term.history[Term.hIdx] || "";
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      Term.hIdx = Math.min(Term.history.length, Term.hIdx + 1);
+      e.target.value = Term.history[Term.hIdx] || "";
+    }
+  });
+  $("#bt-scan-btn").addEventListener("click", () => {
+    if (!Net.connected) { $("#bt-status").textContent = "REQUIRES DEVICE"; return; }
+    $("#bt-status").textContent = "SCANNING (8s)...";
+    Net.send({ type: "bt.scan" });
+  });
   $("#dashcam-toggle-btn").addEventListener("click", () => {
     const on = $("#dashcam-toggle-btn").textContent === "OFF";
     Config.set("dashcam", on);
@@ -2355,6 +2537,24 @@ function updateSourceButtons() {
   // Inverse-video .selected marks the ACTIVE mode; cursor focus is a ring.
   $("#src-auto-btn").classList.toggle("selected", Config.data.source_mode === "AUTO");
   $("#src-demo-btn").classList.toggle("selected", Config.data.source_mode === "DEMO");
+}
+/* Units (bailey): one place decides F-vs-C and MPG-vs-KM/L; HUD converts,
+ * DRIVE's raw table stays in the truck's native units by design. */
+function unitTemp() { return Config.data.units_temp === "C" ? "C" : "F"; }
+function unitEcon() { return Config.data.units_econ === "KML" ? "KML" : "MPG"; }
+function econTxt(mpg) {
+  if (mpg == null) return null;
+  return unitEcon() === "KML" ? (mpg * 0.425144).toFixed(1) + " KM/L" : mpg.toFixed(1) + " MPG";
+}
+function rangeTxt(miles) {
+  if (miles == null) return "--";
+  return unitEcon() === "KML" ? Math.round(miles * 1.609) + " KM" : Math.round(miles) + " MI";
+}
+function updateUnitButtons() {
+  $("#unit-f-btn").classList.toggle("selected", unitTemp() === "F");
+  $("#unit-c-btn").classList.toggle("selected", unitTemp() === "C");
+  $("#unit-mpg-btn").classList.toggle("selected", unitEcon() === "MPG");
+  $("#unit-kml-btn").classList.toggle("selected", unitEcon() === "KML");
 }
 function renderAbout(info) {
   LastInfo.data = info;

@@ -496,7 +496,7 @@ class TVPlayer:
 
 FAST_PIDS = ["SPEED", "RPM", "INTAKE_PRESSURE", "MAF"]
 SLOW_PIDS = ["FUEL_LEVEL", "COOLANT_TEMP", "CONTROL_MODULE_VOLTAGE", "OIL_TEMP",
-             "BAROMETRIC_PRESSURE", "HYBRID_BATTERY_REMAINING"]
+             "BAROMETRIC_PRESSURE", "HYBRID_BATTERY_REMAINING", "FUEL_TYPE"]
 
 # Baud rates to try, most-likely first. OBDLink EX defaults to 115200.
 OBD_BAUDS = [115200, 230400, 38400, 9600]
@@ -566,6 +566,9 @@ RAW_PIDS = {
     "OIL_TEMP": ("015C", lambda b: float(b[0] - 40) if b else None),
     "BAROMETRIC_PRESSURE": ("0133", lambda b: float(b[0]) if b else None),
     "HYBRID_BATTERY_REMAINING": ("015B", lambda b: b[0] * 100.0 / 255 if b else None),
+    # SAE J1979 fuel-type coding: 1=gasoline 4=diesel 8=electric 17-22=hybrid.
+    # Lets detect_vtype() trust the ECU's own word instead of guessing.
+    "FUEL_TYPE": ("0151", lambda b: float(b[0]) if b else None),
 }
 
 
@@ -1071,6 +1074,21 @@ class Telemetry:
             return
         if self.vtype:
             return
+        # The ECU's own declaration beats every heuristic. Raw path yields the
+        # SAE code (float); python-obd yields a string like "Diesel".
+        ft = self.values.get("FUEL_TYPE")
+        fts = str(ft).lower().replace(".0", "") if ft is not None else ""
+        if fts:
+            if "hybrid" in fts or fts in ("17", "18", "19", "20", "21", "22"):
+                self.vtype = "hybrid"
+                return
+            if fts == "8" or fts == "electric":
+                self.vtype = "ev"
+                return
+            if fts == "4" or "diesel" in fts:
+                # a diesel with an HV pack answering is still a hybrid
+                self.vtype = "hybrid" if self.values.get("HYBRID_BATTERY_REMAINING") is not None else "diesel"
+                return
         if self.values.get("HYBRID_BATTERY_REMAINING") is not None:
             self.vtype = "hybrid"
         elif self.values.get("FUEL_LEVEL") is not None:
@@ -1126,6 +1144,10 @@ class Telemetry:
         if "P1A42" not in self.dtcs:
             self.dtcs["P1A42"] = {"first_seen": datetime.now().isoformat(),
                                    "desc": "Hybrid battery cell imbalance (demo)"}
+        # Cycle the VEHICLE tab's door diagram so showcase shows it off.
+        cyc = int(t / 6) % 8
+        self.doors = {"fl": cyc == 1, "fr": cyc == 3, "rl": False, "rr": False,
+                      "hood": cyc == 5, "trunk": cyc == 7}
 
     async def poll_loop(self):
         last_slow = 0.0
@@ -1179,6 +1201,18 @@ class Telemetry:
 
                 # --- real adapter is linked: poll the truck ---
                 self.live = True
+                # The showcase's FAKE trouble code must never sit in the real
+                # ledger (bailey saw demo P1A42 listed like a stored code).
+                demo_codes = [c for c, i in self.dtcs.items()
+                              if "(demo)" in (i.get("desc") or "")]
+                if demo_codes:
+                    for c in demo_codes:
+                        del self.dtcs[c]
+                    try:
+                        self.dtc_path.write_text(json.dumps(self.dtcs, indent=2))
+                    except Exception:
+                        pass
+                self.doors = None  # door status needs body-control PIDs (TBD)
                 got = await self.poll_fast()
                 now = time.time()
                 if now - last_slow > 2:
@@ -1237,6 +1271,7 @@ class Telemetry:
             "dtcs": self.dtcs,
             "obd_status": self.obd_status,
             "obd_port": self.obd_port,
+            "doors": getattr(self, "doors", None),
         }
 
 
@@ -1467,12 +1502,116 @@ async def wifi_join(ssid, psk):
         out, _ = await asyncio.wait_for(proc.communicate(), timeout=45)
         detail = (out or b"").decode(errors="ignore").strip()[:200]
         ok = proc.returncode == 0
+        # Polkit denies session-less systemd services ("Not authorized to
+        # control networking" -- hit on hardware 2026-07-12). The polkit rule
+        # installed by install.sh is the real fix; sudo (whitelisted in
+        # sudoers-gost) is the fallback so Wi-Fi works either way.
+        if not ok and "authorized" in detail.lower():
+            log("wifi join: polkit denied, retrying via sudo")
+            proc = await asyncio.create_subprocess_exec(
+                "sudo", "-n", *args,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=45)
+            detail = (out or b"").decode(errors="ignore").strip()[:200]
+            ok = proc.returncode == 0
         log("wifi join", ssid, "->", "OK" if ok else "FAIL", detail)
         return {"ok": ok, "detail": detail}
     except asyncio.TimeoutError:
         return {"ok": False, "detail": "timed out (weak signal or wrong password)"}
     except Exception as e:
         log("wifi join failed:", e)
+        return {"ok": False, "detail": str(e)}
+
+
+class TermSession:
+    """Persistent bash for the TERM tab. Line-mode (no pty): commands go to
+    bash stdin, merged stdout/stderr streams back over WS. Enough for apt,
+    map downloads for NAV, cat/sed edits -- not for vim/nano/top."""
+
+    def __init__(self, broadcast):
+        self.broadcast = broadcast
+        self.proc = None
+
+    async def ensure(self):
+        if self.proc is not None and self.proc.returncode is None:
+            return
+        self.proc = await asyncio.create_subprocess_exec(
+            "bash", cwd=os.path.expanduser("~"),
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT)
+        asyncio.get_event_loop().create_task(self._pump())
+
+    async def _pump(self):
+        try:
+            while True:
+                data = await self.proc.stdout.read(4096)
+                if not data:
+                    self.broadcast({"type": "term.out",
+                                    "data": "\n[shell exited -- next command starts a fresh one]\n"})
+                    break
+                self.broadcast({"type": "term.out", "data": data.decode(errors="replace")})
+        except Exception as e:
+            log("term pump ended:", e)
+
+    async def run(self, line):
+        await self.ensure()
+        try:
+            self.proc.stdin.write((line + "\n").encode())
+            await self.proc.stdin.drain()
+        except Exception as e:
+            self.broadcast({"type": "term.out", "data": f"[term error: {e}]\n"})
+            self.proc = None
+
+
+# ---------------------------------------------------------------- bluetooth --
+
+async def _btctl(*args, timeout=20):
+    proc = await asyncio.create_subprocess_exec(
+        "bluetoothctl", *args,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+    out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    return proc.returncode == 0, (out or b"").decode(errors="ignore")
+
+
+async def bt_scan():
+    """Power on, discover for 8s, return every device bluetoothctl knows."""
+    try:
+        for cmd in (["rfkill", "unblock", "bluetooth"],):
+            try:
+                p = await asyncio.create_subprocess_exec(
+                    *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+                await asyncio.wait_for(p.wait(), timeout=5)
+            except Exception:
+                pass
+        await _btctl("power", "on")
+        await _btctl("--timeout", "8", "scan", "on", timeout=15)
+        ok, out = await _btctl("devices")
+        devs = []
+        for line in out.splitlines():
+            p = line.strip().split(" ", 2)
+            if len(p) >= 3 and p[0] == "Device":
+                devs.append({"mac": p[1], "name": p[2]})
+        return devs
+    except Exception as e:
+        log("bt scan failed:", e)
+        return []
+
+
+async def bt_pair(mac):
+    if not mac:
+        return {"ok": False, "detail": "no device"}
+    try:
+        detail = ""
+        for step in ("pair", "trust", "connect"):
+            ok, out = await _btctl(step, mac, timeout=30)
+            detail = out.strip()[-160:]
+            # "connect" often fails for OBD dongles (no audio/input profile);
+            # a successful pair+trust is what matters for rfcomm later.
+            if not ok and step == "pair" and "already" not in out.lower():
+                return {"ok": False, "detail": detail}
+        return {"ok": True, "detail": detail}
+    except Exception as e:
         return {"ok": False, "detail": str(e)}
 
 
@@ -1653,6 +1792,15 @@ async def route_message(state: GostState, ws, msg):
     elif t == "obd.diag":
         result = await state.telemetry.run_diag()
         await ws.send(json.dumps({"type": "obd.diag", "result": result}))
+    elif t == "term.input":
+        if not hasattr(state, "term"):
+            state.term = TermSession(state.broadcast)
+        await state.term.run(str(msg.get("data", "")))
+    elif t == "bt.scan":
+        await ws.send(json.dumps({"type": "bt.scan", "devices": await bt_scan()}))
+    elif t == "bt.pair":
+        res = await bt_pair(msg.get("mac"))
+        await ws.send(json.dumps({"type": "bt.pair", **res}))
     elif t == "dashcam.set":
         await state.dashcam.set_enabled(bool(msg.get("on")))
     elif t == "power":
