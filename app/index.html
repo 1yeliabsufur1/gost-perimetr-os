@@ -1489,7 +1489,9 @@ const VehArt = {
     if (!this.body) this.profile("truck", 4);
     // View + spin come from Settings: 3/4 top-down (default, bailey) vs low
     // side; spinning optional, default a fixed 3/4 pose.
-    this.tilt = (Config.data.veh_view || "top34") === "side" ? 0.42 : 0.95;
+    // NEGATIVE pitch = camera above the car. +0.95 was a belly view (bailey:
+    // "that's a bottom view, not god's eye").
+    this.tilt = (Config.data.veh_view || "top34") === "side" ? -0.35 : -0.95;
     if ((Config.data.veh_spin || "off") === "on") this.rot += 0.006;
     else this.rot += (-0.7 - this.rot) * 0.08;   // ease to the fixed 3/4 angle
     const ctx = cv.getContext("2d");
