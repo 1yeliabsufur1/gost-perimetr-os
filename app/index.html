@@ -318,6 +318,13 @@ a { color: var(--pri); }
             <rect id="veh-rl" class="veh-part door-l" x="52" y="250" width="18" height="80" rx="4"/>
             <rect id="veh-fr" class="veh-part door-r" x="230" y="160" width="18" height="80" rx="4"/>
             <rect id="veh-rr" class="veh-part door-r" x="230" y="250" width="18" height="80" rx="4"/>
+            <!-- truck bed (profile: body=truck only) -->
+            <g id="veh-bed" class="veh-line">
+              <line x1="85" y1="345" x2="215" y2="345"/>
+              <line x1="85" y1="360" x2="215" y2="360"/>
+              <line x1="85" y1="375" x2="215" y2="375"/>
+              <line x1="85" y1="390" x2="215" y2="390"/>
+            </g>
             <!-- trunk / tailgate -->
             <rect id="veh-trunk" class="veh-part" x="80" y="400" width="140" height="34" rx="6"/>
           </svg>
@@ -432,6 +439,20 @@ a { color: var(--pri); }
             <span class="dim">ECONOMY:</span>
             <button data-focus id="unit-mpg-btn">MPG</button>
             <button data-focus id="unit-kml-btn">KM/L</button>
+          </div>
+        </div>
+        <div class="frame" data-title="VEHICLE PROFILE">
+          <div class="settings-row">
+            <span class="dim">BODY:</span>
+            <button data-focus id="veh-body-truck">TRUCK</button>
+            <button data-focus id="veh-body-suv">SUV</button>
+            <button data-focus id="veh-body-sedan">SEDAN</button>
+            <button data-focus id="veh-body-van">VAN</button>
+          </div>
+          <div class="settings-row">
+            <span class="dim">DOORS:</span>
+            <button data-focus id="veh-doors-2">2-DOOR</button>
+            <button data-focus id="veh-doors-4">4-DOOR</button>
           </div>
         </div>
         <div class="frame" data-title="BLUETOOTH">
@@ -1009,6 +1030,33 @@ const Wizard = {
       p2.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); this.submitPassword(); } });
       uname.focus();
     } else if (this.step === 2) {
+      // Vehicle profile -- shapes the VEHICLE tab diagram so a Slate is a
+      // 2-door truck, a Rivian R2 is a 4-door SUV, the F-150 a 4-door truck.
+      body.appendChild(el("div", { class: "line glow" }, ["WHAT IS THIS UNIT INSTALLED IN?"]));
+      body.appendChild(el("div", { class: "line dim" }, ["Sets the VEHICLE tab's body diagram (doors, bed, tailgate). Change anytime in SETTINGS."]));
+      this.vehBody = Config.data.veh_body || "truck";
+      this.vehDoors = Config.data.veh_doors || 4;
+      const mkRow = (label, opts, cur, set) => {
+        const row = el("div", { class: "line" }, [el("span", { class: "dim" }, [label + "  "])]);
+        opts.forEach(([val, text]) => {
+          const b = el("button", { class: "choice-btn" + (val === cur ? " selected" : ""), "data-focus": "" }, [text]);
+          b.addEventListener("click", () => { set(val); this.render(); });
+          row.appendChild(b);
+        });
+        return row;
+      };
+      body.appendChild(mkRow("BODY:", [["truck","TRUCK"],["suv","SUV"],["sedan","SEDAN"],["van","VAN"]],
+        this.vehBody, (v) => { this.vehBody = v; }));
+      body.appendChild(mkRow("DOORS:", [[2,"2-DOOR"],[4,"4-DOOR"]],
+        this.vehDoors, (v) => { this.vehDoors = v; }));
+      const cont = el("button", { "data-focus": "" }, ["[ CONTINUE ]"]);
+      cont.addEventListener("click", () => {
+        Config.set("veh_body", this.vehBody);
+        Config.set("veh_doors", this.vehDoors);
+        this.step = 3; this.render();
+      });
+      body.appendChild(el("div", { class: "line", style: "margin-top:10px;" }, [cont]));
+    } else if (this.step === 3) {
       body.appendChild(el("div", { class: "line glow" }, ["CONNECT THIS UNIT TO THE INTERNET?"]));
       const yes = el("button", { class: "choice-btn", "data-focus": "", onclick: () => this.chooseWifi(true) }, ["YES -- OPEN WI-FI SETUP"]);
       const no = el("button", { class: "choice-btn", "data-focus": "", onclick: () => this.chooseWifi(false) }, ["NO -- STAY OFFLINE"]);
@@ -1318,13 +1366,28 @@ const VEH_NAMES = { fl: "DRIVER DOOR", fr: "PASSENGER DOOR", rl: "REAR LEFT DOOR
 function renderVehicle(t) {
   const banner = $("#veh-banner"), list = $("#veh-open-list");
   if (!banner) return;
+  // Profile from setup wizard / Settings: a Slate is a 2-door truck, an R2
+  // a 4-door SUV -- the diagram should be THEIR vehicle, not a generic one.
+  const vbody = Config.data.veh_body || "truck";
+  const vdoors = Number(Config.data.veh_doors) || 4;
+  const twoDoor = vdoors === 2;
+  const bed = $("#veh-bed");
+  if (bed) bed.style.display = vbody === "truck" ? "" : "none";
+  for (const p of ["rl", "rr"]) {
+    const d = $("#veh-" + p);
+    if (d) d.style.display = twoDoor ? "none" : "";
+  }
+  const names = Object.assign({}, VEH_NAMES,
+    { trunk: vbody === "truck" ? "TAILGATE" : "TRUNK",
+      hood: vbody === "sedan" || vbody === "van" ? "HOOD" : VEH_NAMES.hood });
   const doors = t && t.doors;
   const open = [];
-  for (const p of Object.keys(VEH_NAMES)) {
+  for (const p of Object.keys(names)) {
+    if (twoDoor && (p === "rl" || p === "rr")) continue;
     const part = $("#veh-" + p);
     const isOpen = !!(doors && doors[p]);
     if (part) part.classList.toggle("open", isOpen);
-    if (isOpen) open.push(VEH_NAMES[p]);
+    if (isOpen) open.push(names[p]);
   }
   if (!doors) {
     // Standard OBD has no door PIDs -- Ford exposes them via BCM-specific
@@ -2466,6 +2529,16 @@ function buildSettings() {
   });
   $("#src-auto-btn").addEventListener("click", () => setSourceMode("AUTO"));
   $("#src-demo-btn").addEventListener("click", () => setSourceMode("DEMO"));
+  const setVeh = (key, val) => {
+    Config.set(key, val); updateVehButtons();
+    renderVehicle(Net.telemetry || (Demo.running ? null : undefined));
+  };
+  for (const b of ["truck", "suv", "sedan", "van"]) {
+    $("#veh-body-" + b).addEventListener("click", () => setVeh("veh_body", b));
+  }
+  $("#veh-doors-2").addEventListener("click", () => setVeh("veh_doors", 2));
+  $("#veh-doors-4").addEventListener("click", () => setVeh("veh_doors", 4));
+  updateVehButtons();
   const setUnit = (key, val) => { Config.set(key, val); updateUnitButtons(); };
   $("#unit-f-btn").addEventListener("click", () => setUnit("units_temp", "F"));
   $("#unit-c-btn").addEventListener("click", () => setUnit("units_temp", "C"));
@@ -2589,6 +2662,15 @@ function updateUnitButtons() {
   $("#unit-c-btn").classList.toggle("selected", unitTemp() === "C");
   $("#unit-mpg-btn").classList.toggle("selected", unitEcon() === "MPG");
   $("#unit-kml-btn").classList.toggle("selected", unitEcon() === "KML");
+}
+function updateVehButtons() {
+  const vb = Config.data.veh_body || "truck";
+  const vd = Number(Config.data.veh_doors) || 4;
+  for (const b of ["truck", "suv", "sedan", "van"]) {
+    $("#veh-body-" + b).classList.toggle("selected", vb === b);
+  }
+  $("#veh-doors-2").classList.toggle("selected", vd === 2);
+  $("#veh-doors-4").classList.toggle("selected", vd === 4);
 }
 function renderAbout(info) {
   LastInfo.data = info;
