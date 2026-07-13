@@ -423,6 +423,10 @@ a { color: var(--pri); }
           <div id="nav-fallback-msg">SCANNING FOR OFFLINE MAP DATA...</div>
           <canvas id="nav-radar" width="220" height="220"></canvas>
           <div id="nav-coords" class="dim"></div>
+          <div style="margin-top:12px;">
+            <button data-focus id="nav-download-map-btn">[ DOWNLOAD MAP REGION ]</button>
+            <div id="nav-download-status" class="dim" style="margin-top:6px; white-space:pre-wrap; max-height:120px; overflow-y:auto;"></div>
+          </div>
         </div>
       </section>
 
@@ -834,6 +838,10 @@ const Net = {
         body.appendChild(el("div", { style: "margin-top:10px;" }, [close]));
       });
     }
+    else if (msg.type === "fault") { FaultBus.raise(msg.id, { label: msg.label, crit: msg.crit }); }
+    else if (msg.type === "maps.regions") { Maps.showPicker(msg.regions); }
+    else if (msg.type === "maps.progress") { Maps.progress(msg.line); }
+    else if (msg.type === "maps.done") { Maps.done(msg); }
     else if (msg.type === "term.out") {
       // Strip ANSI escape sequences -- the CRT theme IS the styling.
       Term.print(String(msg.data || "").replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, ""));
@@ -971,6 +979,43 @@ const Weather = {
       this.paint("◌", fallback, false);
     }
   },
+};
+
+/* ============================================================================
+ * MAPS -- turnkey offline region download (bundled pmtiles extract). Any US
+ * region or the whole lower-48, no SSH/terminal. Progress streamed over WS.
+ * ========================================================================== */
+const Maps = {
+  open() {
+    if (!Net.connected) { this.setStatus("REQUIRES DEVICE (downloads run on the Pi)"); return; }
+    this.setStatus("loading regions...");
+    Net.send({ type: "maps.regions" });
+  },
+  showPicker(regions) {
+    Modal.open("DOWNLOAD MAP REGION", (body) => {
+      body.appendChild(el("div", { class: "dim", style: "margin-bottom:8px;" },
+        ["Needs internet once. Downloads only the region (not the planet). Whole-USA is larger -- give it a few minutes."]));
+      (regions || []).forEach((r) => {
+        const b = el("button", { "data-focus": "", style: "display:block; width:100%; text-align:left; margin:2px 0;" }, [r]);
+        b.addEventListener("click", () => {
+          this.setStatus("starting: " + r);
+          Net.send({ type: "maps.download", region: r });
+          Modal.close();
+        });
+        body.appendChild(b);
+      });
+      const close = el("button", { "data-focus": "", style: "margin-top:8px;" }, ["[ CANCEL ]"]);
+      close.addEventListener("click", () => Modal.close());
+      body.appendChild(close);
+    });
+  },
+  progress(line) { this.setStatus(line); },
+  done(msg) {
+    this.setStatus(msg.ok ? ("DONE -- " + (msg.detail || "") + "  (map loading...)")
+                          : ("FAILED -- " + (msg.detail || "")));
+    if (msg.ok) setTimeout(() => { if (Net.connected) Net.send({ type: "config.get" }); Nav.activate && Nav.activate(); }, 1500);
+  },
+  setStatus(t) { const s = $("#nav-download-status"); if (s) s.textContent = t; },
 };
 
 function onConfigSynced() {
@@ -3014,6 +3059,7 @@ function buildSettings() {
       e.target.value = Term.history[Term.hIdx] || "";
     }
   });
+  $("#nav-download-map-btn").addEventListener("click", () => Maps.open());
   $("#bt-scan-btn").addEventListener("click", () => {
     if (!Net.connected) { $("#bt-status").textContent = "REQUIRES DEVICE"; return; }
     $("#bt-status").textContent = "SCANNING (8s)...";

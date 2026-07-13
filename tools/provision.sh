@@ -43,6 +43,20 @@ apt-get install -y liblgpio-dev || \
 apt-get install -y chromium-browser || apt-get install -y chromium || \
   log "WARNING: no chromium package found -- kiosk will not start"
 
+# pmtiles CLI (single Go binary) -- powers the turnkey offline map-region
+# download in NAV. Baked in at BUILD time so the device never installs a
+# binary at runtime. arm64 for the Pi; best-effort so an x86 test build skips.
+PMTILES_VER=1.31.1
+PMTILES_URL="https://github.com/protomaps/go-pmtiles/releases/download/v${PMTILES_VER}/go-pmtiles_${PMTILES_VER}_Linux_arm64.tar.gz"
+if curl -fsSL -o /tmp/pmtiles.tgz "$PMTILES_URL" 2>/dev/null; then
+  tar -xzf /tmp/pmtiles.tgz -C /tmp pmtiles 2>/dev/null && \
+    install -m0755 /tmp/pmtiles /usr/local/bin/pmtiles && \
+    log "pmtiles $PMTILES_VER installed" || log "WARNING: pmtiles unpack failed"
+  rm -f /tmp/pmtiles.tgz /tmp/pmtiles
+else
+  log "WARNING: pmtiles download failed -- map-region download disabled until installed"
+fi
+
 # Enable (not --now: at build time there is no running systemd) so seatd is
 # up on the real first boot. install.sh does the --now start on-device.
 systemctl enable seatd 2>/dev/null || true

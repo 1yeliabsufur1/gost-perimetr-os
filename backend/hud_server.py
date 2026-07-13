@@ -208,6 +208,103 @@ def extra_media_roots():
     return roots
 
 
+# -------------------------------------------------- offline map downloads ----
+# Turnkey region downloads: bundled `pmtiles` CLI extracts just a region from
+# Protomaps' daily planet build via HTTP range requests (only the region is
+# fetched, never the whole planet). Presets cover the whole USA + regions;
+# a custom bbox is also accepted. (maxzoom trades detail for size.)
+MAPS_BUILD_BASE = "https://build.protomaps.com"
+MAP_REGIONS = {
+    "USA (lower 48)":        (-125.0, 24.4, -66.9, 49.4, 11),
+    "US West":               (-125.0, 31.0, -102.0, 49.4, 11),
+    "US Central":            (-104.5, 25.8, -80.5, 49.4, 11),
+    "US East":               (-83.0, 24.4, -66.9, 47.5, 11),
+    "Arizona":               (-115.0, 31.3, -109.0, 37.1, 12),
+    "Phoenix Metro":         (-112.9, 32.9, -111.4, 33.9, 14),
+    "California":            (-124.5, 32.5, -114.1, 42.1, 12),
+    "Texas":                 (-106.7, 25.8, -93.5, 36.6, 12),
+    "Florida":               (-87.7, 24.5, -80.0, 31.1, 12),
+    "Colorado":              (-109.1, 36.9, -102.0, 41.1, 12),
+    "New Mexico":            (-109.1, 31.3, -103.0, 37.1, 12),
+    "Nevada":                (-120.1, 35.0, -114.0, 42.1, 12),
+    "Utah":                  (-114.1, 36.9, -109.0, 42.1, 12),
+    "Pacific NW (WA/OR)":    (-124.8, 41.9, -116.4, 49.1, 12),
+    "Northeast":             (-80.6, 38.9, -66.9, 47.5, 12),
+    "Great Lakes":           (-93.0, 37.8, -80.4, 47.6, 12),
+    "Southeast":             (-91.7, 30.1, -75.4, 36.7, 12),
+}
+
+
+def latest_pmtiles_build():
+    """Newest Protomaps daily build that answers a range request. The dated
+    URL rotates, so probe back from today (found via SSH: today returned 206)."""
+    import urllib.request
+    from datetime import timedelta
+    for d in range(0, 14):
+        day = (datetime.utcnow() - timedelta(days=d)).strftime("%Y%m%d")
+        url = "%s/%s.pmtiles" % (MAPS_BUILD_BASE, day)
+        try:
+            req = urllib.request.Request(url)
+            req.add_header("Range", "bytes=0-0")
+            with urllib.request.urlopen(req, timeout=12) as r:
+                if r.status in (200, 206):
+                    return url
+        except Exception:
+            continue
+    return None
+
+
+async def maps_download(state, region, bbox=None, maxzoom=None):
+    import shutil
+    if not shutil.which("pmtiles"):
+        return {"ok": False, "detail": "pmtiles tool not on this image -- reflash the latest build"}
+    if region in MAP_REGIONS:
+        x1, y1, x2, y2, mz = MAP_REGIONS[region]
+        bbox = "%s,%s,%s,%s" % (x1, y1, x2, y2)
+        maxzoom = maxzoom or mz
+        name = region
+    else:
+        name = region or "custom"
+    if not bbox:
+        return {"ok": False, "detail": "no region / bbox"}
+    state.broadcast({"type": "maps.progress", "line": "finding latest map build..."})
+    src = await asyncio.get_event_loop().run_in_executor(None, latest_pmtiles_build)
+    if not src:
+        FaultBus_broadcast(state, "maps", "MAP DOWNLOAD: no internet / build unreachable")
+        return {"ok": False, "detail": "no reachable Protomaps build (offline?)"}
+    MAPS_DIR.mkdir(parents=True, exist_ok=True)
+    safe = re.sub(r"[^A-Za-z0-9_-]", "_", name).strip("_").lower() or "region"
+    out = str(MAPS_DIR / (safe + ".pmtiles"))
+    state.broadcast({"type": "maps.progress",
+                     "line": "extracting %s (bbox %s, z<=%s)..." % (name, bbox, maxzoom or 13)})
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "pmtiles", "extract", src, out, "--bbox=" + bbox,
+            "--maxzoom=" + str(maxzoom or 13),
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+        while True:
+            line = await proc.stdout.readline()
+            if not line:
+                break
+            txt = line.decode(errors="replace").strip()
+            if txt:
+                state.broadcast({"type": "maps.progress", "line": txt})
+        rc = await proc.wait()
+        ok = rc == 0 and os.path.exists(out) and os.path.getsize(out) > 0
+        return {"ok": ok, "detail": ("saved " + os.path.basename(out)) if ok
+                else "extract failed (rc %s)" % rc}
+    except Exception as e:
+        return {"ok": False, "detail": str(e)}
+
+
+def FaultBus_broadcast(state, fid, label):
+    """Push a fault to the frontend fault bus over WS (Part 2 s8)."""
+    try:
+        state.broadcast({"type": "fault", "id": fid, "label": label})
+    except Exception:
+        pass
+
+
 def link_usb_maps():
     """A maps/ (or MAPS/) folder with .pmtiles on a USB stick shows up in NAV
     automatically: symlinked into MAPS_DIR (no copying gigabytes to the SD),
@@ -1476,25 +1573,64 @@ class GPSReader:
             log("pyserial unavailable, GPS disabled")
             return
         import glob
-        ports = glob.glob("/dev/ttyACM*") + glob.glob("/dev/serial0")
-        if not ports:
-            log("no GPS serial port found")
-            return
+        # USB GPS pucks only (ttyACM/ttyUSB). Do NOT touch /dev/serial0 -- on
+        # the Pi 5 that's the Bluetooth modem's UART (hci_uart on serial0-0);
+        # opening it as "GPS" fought the BT stack that OBD-over-Bluetooth needs
+        # AND spammed "readiness but no data" every second (found on hw
+        # 2026-07-14). A GPS HAT on serial0 can be opted in via config gps_port.
+        cfg_port = None
         try:
-            ser = serial.Serial(ports[0], 9600, timeout=1)
-        except Exception as e:
-            log("GPS open failed:", e)
-            return
+            cfg_port = self.state.config.get("gps_port") if hasattr(self, "state") else None
+        except Exception:
+            cfg_port = None
+        ports = ([cfg_port] if cfg_port else []) + \
+            sorted(glob.glob("/dev/ttyACM*") + glob.glob("/dev/ttyUSB*"))
         loop = asyncio.get_event_loop()
         while True:
+            ports = ([cfg_port] if cfg_port else []) + \
+                sorted(glob.glob("/dev/ttyACM*") + glob.glob("/dev/ttyUSB*"))
+            if not ports:
+                await asyncio.sleep(10)   # nothing plugged in -- check back, quietly
+                continue
+            ser = None
+            for p in ports:
+                try:
+                    ser = serial.Serial(p, 9600, timeout=1)
+                    break
+                except Exception:
+                    ser = None
+            if ser is None:
+                await asyncio.sleep(10)
+                continue
+            # Probe: a real GPS emits NMEA ('$G...') within a few seconds. If it
+            # doesn't, this isn't a GPS (e.g. an ELM327 on ttyUSB) -- release it
+            # and back off instead of erroring forever.
+            errs = 0
+            saw_nmea = False
+            probe_deadline = time.time() + 6
             try:
-                line = await loop.run_in_executor(None, ser.readline)
-                fix = parse_nmea(line.decode(errors="ignore").strip())
-                if fix:
-                    self.broadcast_cb({"type": "gps", **fix})
+                while True:
+                    line = await loop.run_in_executor(None, ser.readline)
+                    text = line.decode(errors="ignore").strip()
+                    if text.startswith("$G"):
+                        saw_nmea = True
+                        fix = parse_nmea(text)
+                        if fix:
+                            self.broadcast_cb({"type": "gps", **fix})
+                        errs = 0
+                    elif not saw_nmea and time.time() > probe_deadline:
+                        raise IOError("no NMEA -- not a GPS on " + ser.port)
+                    elif not text:
+                        errs += 1
+                        if errs > 5 and not saw_nmea:
+                            raise IOError("silent port -- not a GPS on " + ser.port)
             except Exception as e:
-                log("GPS read error:", e)
-                await asyncio.sleep(1)
+                try:
+                    ser.close()
+                except Exception:
+                    pass
+                log("GPS: releasing", getattr(ser, "port", "?"), "--", e)
+                await asyncio.sleep(15)   # back off; don't spam
 
 
 class Dashcam:
@@ -1915,6 +2051,15 @@ async def route_message(state: GostState, ws, msg):
         if not hasattr(state, "term"):
             state.term = TermSession(state.broadcast)
         await state.term.run(str(msg.get("data", "")))
+    elif t == "maps.regions":
+        await ws.send(json.dumps({"type": "maps.regions",
+                                  "regions": list(MAP_REGIONS.keys())}))
+    elif t == "maps.download":
+        res = await maps_download(state, msg.get("region"),
+                                  msg.get("bbox"), msg.get("maxzoom"))
+        if res.get("ok"):
+            state.broadcast(state.library_payload())   # NAV re-scans maps
+        await ws.send(json.dumps({"type": "maps.done", **res}))
     elif t == "bt.scan":
         await ws.send(json.dumps({"type": "bt.scan", "devices": await bt_scan()}))
     elif t == "bt.pair":
