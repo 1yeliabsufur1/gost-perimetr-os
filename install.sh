@@ -152,6 +152,9 @@ chmod +x "$GOST_HOME/install.sh" "$GOST_HOME/system/kiosk-start.sh" \
 install -m 750 -o root -g root "$GOST_HOME/system/gost-setpass" /usr/local/sbin/gost-setpass
 install -m 750 -o root -g root "$GOST_HOME/system/gost-settime" /usr/local/sbin/gost-settime
 install -m 750 -o root -g root "$GOST_HOME/system/gost-power" /usr/local/sbin/gost-power
+# Ford-PID capture tool (doors/TPMS/oil-life mapping): logs to the FAT boot
+# partition so the operator can pull them off the SD card from a PC.
+install -m 0755 "$GOST_HOME/tools/obd_probe.py" /usr/local/bin/gost-obd-probe
 
 SUDOERS_TMP="$(mktemp)"
 sed "s/__GOST_USER__/$GOST_USER/g" "$GOST_HOME/system/sudoers-gost" > "$SUDOERS_TMP"
