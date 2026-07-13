@@ -438,6 +438,11 @@ a { color: var(--pri); }
             <button data-focus id="veh-doors-4">4-DOOR</button>
           </div>
           <div class="settings-row">
+            <span class="dim">STYLE:</span>
+            <button data-focus id="veh-style-3d">3D WIREFRAME</button>
+            <button data-focus id="veh-style-2d">2D FLAT</button>
+          </div>
+          <div class="settings-row">
             <span class="dim">VIEW:</span>
             <button data-focus id="veh-view-top34">3/4 TOP-DOWN</button>
             <button data-focus id="veh-view-side">LOW SIDE</button>
@@ -1467,6 +1472,69 @@ const VehArt = {
     this.segs = segs; this.parts = parts;
   },
 
+  /* The original flat top-down diagram, kept as STYLE: 2D FLAT for anyone
+   * who wants the basic look. Same data: doors swing flat, low tire pulses. */
+  draw2d(cv, ts) {
+    const dpr = window.devicePixelRatio || 1;
+    const cw = cv.width, ch = cv.height;
+    const ctx = cv.getContext("2d");
+    ctx.clearRect(0, 0, cw, ch);
+    const color = getComputedStyle(document.documentElement).getPropertyValue("--pri").trim() || "#ffb000";
+    const s = Math.min(cw / 320, ch / 500);
+    const ox = cw / 2 - 150 * s, oy = ch / 2 - 235 * s;
+    const X = (x) => ox + x * s, Y = (y) => oy + y * s;
+    ctx.strokeStyle = color; ctx.fillStyle = color;
+    ctx.shadowColor = color; ctx.shadowBlur = 8 * dpr;
+    ctx.lineWidth = 2 * Math.max(1, s);
+    ctx.font = `${11 * Math.max(1, s)}px monospace`;
+    ctx.textAlign = "center";
+    const rr = (x, y, w, h) => { ctx.strokeRect(X(x), Y(y), w * s, h * s); };
+    const ln = (x1, y1, x2, y2) => { ctx.beginPath(); ctx.moveTo(X(x1), Y(y1)); ctx.lineTo(X(x2), Y(y2)); ctx.stroke(); };
+    const pulse = 0.6 + 0.4 * Math.sin(ts / 140);
+    const openAmt = (n) => { const t = this.open[n] ? 1 : 0; this.anim[n] = (this.anim[n] || 0) + (t - (this.anim[n] || 0)) * 0.12; return this.anim[n]; };
+    ctx.globalAlpha = 0.9;
+    rr(70, 30, 160, 410);                                   // body
+    ln(80, 150, 220, 150); rr(95, 160, 110, 60);            // windshield + cabin
+    const isTruck = this.body === "truck";
+    ln(80, isTruck ? 330 : 340, 220, isTruck ? 330 : 340);  // rear glass
+    if (isTruck) for (let y = 345; y <= 390; y += 15) ln(85, y, 215, y);  // bed
+    // hood: brighter + outline shifted when open
+    const hoodA = openAmt("hood");
+    ctx.globalAlpha = hoodA > 0.05 ? pulse : 0.9;
+    rr(80, 40 - hoodA * 14, 140, 80);
+    // doors: swing out flat around their front corner
+    const doorDefs = [["fl", 52, 160, -1], ["rl", 52, 250, -1], ["fr", 230, 160, 1], ["rr", 230, 250, 1]];
+    for (const [name, dx, dy, side] of doorDefs) {
+      if (this.doorCount === 2 && (name === "rl" || name === "rr")) continue;
+      const a = openAmt(name) * 0.9 * -side;   // negative side => swings AWAY from the body
+      ctx.globalAlpha = Math.abs(a) > 0.05 ? pulse : 0.9;
+      ctx.save();
+      ctx.translate(X(dx + (side < 0 ? 18 : 0)), Y(dy));
+      ctx.rotate(a);
+      ctx.strokeRect(side < 0 ? -18 * s : 0, 0, 18 * s, 80 * s);
+      ctx.restore();
+    }
+    // trunk / tailgate / hatch
+    const tA = openAmt("trunk");
+    ctx.globalAlpha = tA > 0.05 ? pulse : 0.9;
+    rr(80, 400 + tA * 16, 140, 34);
+    // wheels + TPMS
+    const wheelDefs = [["fl", 46, 120], ["fr", 238, 120], ["rl", 46, 350], ["rr", 238, 350]];
+    for (const [name, wx, wy] of wheelDefs) {
+      const psi = this.tires ? this.tires[name] : null;
+      const low = psi != null && psi < 30;
+      ctx.globalAlpha = low ? pulse : 0.9;
+      ctx.lineWidth = (low ? 3 : 2) * Math.max(1, s);
+      rr(wx, wy, 16, 44);
+      if (psi != null) {
+        ctx.globalAlpha = low ? 1 : 0.9;
+        ctx.fillText(Math.round(psi) + (low ? " PSI ⚠" : " PSI"), X(wx + 8), Y(wy + 62));
+      }
+      ctx.lineWidth = 2 * Math.max(1, s);
+    }
+    ctx.globalAlpha = 1;
+  },
+
   proj(p, cw, ch) {
     const cy = Math.cos(this.rot), sy = Math.sin(this.rot);
     let X = p[0]*cy + p[2]*sy, Z = -p[0]*sy + p[2]*cy;
@@ -1487,6 +1555,7 @@ const VehArt = {
     if (cv.width !== cw || cv.height !== ch) { cv.width = cw; cv.height = ch; }
     if (!cw || !ch) return;
     if (!this.body) this.profile("truck", 4);
+    if ((Config.data.veh_style || "3d") === "2d") { this.draw2d(cv, ts); return; }
     // View + spin come from Settings: 3/4 top-down (default, bailey) vs low
     // side; spinning optional, default a fixed 3/4 pose.
     // NEGATIVE pitch = camera above the car. +0.95 was a belly view (bailey:
@@ -2711,6 +2780,8 @@ function buildSettings() {
   }
   $("#veh-doors-2").addEventListener("click", () => setVeh("veh_doors", 2));
   $("#veh-doors-4").addEventListener("click", () => setVeh("veh_doors", 4));
+  $("#veh-style-3d").addEventListener("click", () => setVeh("veh_style", "3d"));
+  $("#veh-style-2d").addEventListener("click", () => setVeh("veh_style", "2d"));
   $("#veh-view-top34").addEventListener("click", () => setVeh("veh_view", "top34"));
   $("#veh-view-side").addEventListener("click", () => setVeh("veh_view", "side"));
   $("#veh-spin-on").addEventListener("click", () => setVeh("veh_spin", "on"));
@@ -2848,6 +2919,9 @@ function updateVehButtons() {
   }
   $("#veh-doors-2").classList.toggle("selected", vd === 2);
   $("#veh-doors-4").classList.toggle("selected", vd === 4);
+  const style = Config.data.veh_style || "3d";
+  $("#veh-style-3d").classList.toggle("selected", style === "3d");
+  $("#veh-style-2d").classList.toggle("selected", style === "2d");
   const view = Config.data.veh_view || "top34";
   $("#veh-view-top34").classList.toggle("selected", view === "top34");
   $("#veh-view-side").classList.toggle("selected", view === "side");
