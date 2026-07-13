@@ -50,6 +50,23 @@ echo "$GOST_USER" > /etc/gost-user
 rfkill unblock wifi 2>/dev/null || true
 rfkill unblock bluetooth 2>/dev/null || true   # BT pairing UI + wireless OBD
 
+# Chromium enterprise policy: the kiosk browser must never offer to save
+# passwords (the Wi-Fi PSK field triggered Chrome's "save password?" bubble
+# over the NAV tab -- bailey 2026-07-13). Policy beats flags: flags like
+# --disable-save-password-bubble come and go between Chromium versions.
+for CHROMIUM_ETC in /etc/chromium /etc/chromium-browser; do
+  mkdir -p "$CHROMIUM_ETC/policies/managed"
+  cat > "$CHROMIUM_ETC/policies/managed/gost-kiosk.json" <<'POLICY'
+{
+  "PasswordManagerEnabled": false,
+  "AutofillCreditCardEnabled": false,
+  "AutofillAddressEnabled": false,
+  "TranslateEnabled": false,
+  "DefaultNotificationsSetting": 2
+}
+POLICY
+done
+
 # Identity: this is a GOST head unit, not a stock "raspberrypi".
 if [ "$(hostname)" != "gost" ]; then
   hostnamectl set-hostname gost 2>/dev/null || echo gost > /etc/hostname

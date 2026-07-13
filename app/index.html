@@ -751,7 +751,10 @@ const Net = {
     else if (msg.type === "wifi.scan") { Wifi.renderScanResults(msg.networks); }
     else if (msg.type === "wifi.join") {
       const status = $("#wifi-connect-status");
-      if (status) status.textContent = msg.ok ? "CONNECTED" : ("FAILED: " + (msg.detail || "check password"));
+      if (status) status.textContent = msg.ok ? "✓ CONNECTED" : ("FAILED: " + (msg.detail || "check password"));
+      // Success closes the dialog on its own -- bailey: it just sat there
+      // with no confirmation anywhere after a good join.
+      if (msg.ok) setTimeout(() => { if (Modal.isOpen()) Modal.close(); }, 1800);
     }
     else if (msg.type === "obd.diag") {
       if (window.setDiagStatus) window.setDiagStatus("DONE");
@@ -2396,7 +2399,7 @@ const Wifi = {
   renderManualForm(body) {
     const saved = LS.get("wifi_last", null);
     const ssidInput = el("input", { type: "text", "data-focus": "", placeholder: "SSID", id: "wifi-ssid-input" });
-    const pskInput = el("input", { type: "password", "data-focus": "", placeholder: "PASSWORD", id: "wifi-psk-input" });
+    const pskInput = el("input", { type: "password", "data-focus": "", placeholder: "PASSWORD", id: "wifi-psk-input", autocomplete: "new-password" });
     if (saved) ssidInput.value = saved.ssid;
     const status = el("div", { class: "dim", id: "wifi-connect-status" }, [""]);
     const connectBtn = el("button", { "data-focus": "" }, ["[ CONNECT ]"]);

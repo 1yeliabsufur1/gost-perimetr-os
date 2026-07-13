@@ -1181,21 +1181,23 @@ class Telemetry:
                 # switching to real data the instant the adapter links up.
                 if not self.obd_linked:
                     now = time.time()
-                    diag = "searching for adapter..."
                     if now - last_connect > 6:   # don't hammer the port
                         last_connect = now
                         self.values = {}
                         self.vtype = None
                         await self.connect_obd()
+                        # Freeze the REAL reason from the connect attempt.
+                        # Never re-read obd_status here next cycle -- that fed
+                        # the banner back into itself and grew "SHOWCASE
+                        # fallback -- SHOWCASE fallback -- ..." forever
+                        # (bailey's photo 2026-07-13).
+                        self.connect_diag = self.obd_status
                         dead_cycles = 0
                     if not self.obd_linked:
-                        # SHOWCASE fallback -- keep the DETAILED diagnostic from
-                        # connect_obd (e.g. "adapter OK but car not answering")
-                        # visible on the DRIVE banner so the screen self-explains.
-                        diag = self.obd_status
                         self.demo_tick()
                         self.live = False
-                        self.obd_status = "SHOWCASE fallback -- " + diag
+                        self.obd_status = ("SHOWCASE fallback -- " +
+                                           getattr(self, "connect_diag", "searching for adapter..."))
                         await asyncio.sleep(0.2)
                         continue
 

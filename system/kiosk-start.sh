@@ -107,4 +107,5 @@ exec cage -- "$CHROMIUM_BIN" \
   --enable-gpu \
   --enable-zero-copy \
   --ozone-platform=wayland \
-  --password-store=basic
+  --password-store=basic \
+  --disable-save-password-bubble
