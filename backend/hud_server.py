@@ -208,6 +208,38 @@ def extra_media_roots():
     return roots
 
 
+def link_usb_maps():
+    """A maps/ (or MAPS/) folder with .pmtiles on a USB stick shows up in NAV
+    automatically: symlinked into MAPS_DIR (no copying gigabytes to the SD),
+    dead links pruned when the stick is unplugged."""
+    try:
+        MAPS_DIR.mkdir(parents=True, exist_ok=True)
+        for p in MAPS_DIR.iterdir():
+            if p.is_symlink() and not p.exists():
+                p.unlink()
+        for base in (Path("/media"), Path("/mnt")):
+            if not base.is_dir():
+                continue
+            for user_dir in base.iterdir():
+                if not user_dir.is_dir():
+                    continue
+                try:
+                    sticks = list(user_dir.iterdir())
+                except OSError:
+                    continue
+                for stick in sticks:
+                    for mname in ("maps", "MAPS"):
+                        md = stick / mname
+                        if not md.is_dir():
+                            continue
+                        for f in md.glob("*.pmtiles"):
+                            dst = MAPS_DIR / f.name
+                            if not dst.exists():
+                                dst.symlink_to(f)
+    except Exception as e:
+        log("usb map link failed:", e)
+
+
 def scan_channels():
     channels = {}
     roots = [MEDIA_DIR / "TV"] + [r / "TV" for r in extra_media_roots()]
@@ -1742,6 +1774,7 @@ class GostState:
             fut.add_done_callback(lambda f: f.exception() and log("send failed:", f.exception()))
 
     async def refresh_library(self):
+        link_usb_maps()
         self.channels = scan_channels()
         self.commercials = scan_commercials()
         self.music = scan_music()

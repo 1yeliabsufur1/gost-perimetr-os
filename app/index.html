@@ -308,6 +308,10 @@ a { color: var(--pri); }
         <div class="frame" data-title="VEHICLE STATUS" style="height:100%; text-align:center; display:flex; flex-direction:column;">
           <div id="veh-banner" class="dim" style="font-size:12px; margin:4px 0;"></div>
           <canvas id="veh3d" style="flex:1; width:100%; min-height:0;"></canvas>
+          <div id="veh-rotate-row" style="min-height:24px;">
+            <button data-focus id="veh-rot-left">◄ ROTATE</button>
+            <button data-focus id="veh-rot-right">ROTATE ►</button>
+          </div>
           <div id="veh-open-list" class="glow" style="font-size:15px; min-height:20px;"></div>
         </div>
       </section>
@@ -333,7 +337,12 @@ a { color: var(--pri); }
           <div id="tv-screen">
             <video id="tv-video" class="hidden" playsinline></video>
             <canvas id="tv-static-canvas" class="hidden" width="480" height="270"></canvas>
-            <div id="tv-idle" style="font-size:13px;color:var(--dim);">SELECT A CHANNEL</div>
+            <div id="tv-idle" style="font-size:13px;color:var(--dim); text-align:left; max-width:480px; line-height:2;">SELECT A CHANNEL (UP/DOWN + ENTER)
+<br><br>HOW THE STATION WORKS:
+<br>&gt; Put video files in /opt/gost/media/TV/CH07/ (etc.) -- that channel goes ON-AIR with a 24/7 rotation.
+<br>&gt; Or open GUIDE and program shows to weekday time blocks, DirecTV style.
+<br>&gt; A USB stick with a TV/ folder auto-imports on plug-in.
+<br>&gt; Empty channels play static -- like real dead air.</div>
             <div id="tv-overlay-text"></div>
             <div id="tv-osd" class="glow"><div class="osd-num"></div><div class="osd-name"></div></div>
           </div>
@@ -388,15 +397,17 @@ a { color: var(--pri); }
       <!-- TERM = on-device shell in theme: map downloads, backend tweaks,
            no SSH needed. Line-mode (no vim/nano). -->
       <section id="tab-term" class="tab">
-        <div class="frame" data-title="TERMINAL // GOST SHELL" style="height:100%; box-sizing:border-box; display:flex; flex-direction:column;">
+        <div class="frame" data-title="TERMINAL // GOST SHELL" style="height:100%; box-sizing:border-box; display:flex; flex-direction:column; padding-bottom:14px;">
           <!-- min-height:0 lets the scrollback SHRINK inside the flex column;
                without it long output pushes the input+hint under the tab bar. -->
           <pre id="term-out" style="flex:1; min-height:0; overflow-y:auto; margin:0; font-size:12px; white-space:pre-wrap; text-align:left;"></pre>
-          <div style="display:flex; gap:6px; align-items:center; border-top:1px dashed var(--line); padding-top:6px;">
+          <!-- Hint ABOVE the input: the input's phosphor glow was bleeding
+               over a hint line placed below it (bailey). -->
+          <div class="dim" style="font-size:10px; margin:4px 0 6px;">LINE-MODE SHELL ON THE DEVICE -- fine for apt / wget / map downloads; no vim/nano (use cat/sed). UP/DOWN = history.</div>
+          <div style="display:flex; gap:6px; align-items:center; border-top:1px dashed var(--line); padding-top:8px;">
             <span class="glow">&gt;</span>
             <input id="term-in" data-focus style="flex:1;" autocomplete="off" spellcheck="false" placeholder="command...">
           </div>
-          <div class="dim" style="font-size:10px;">LINE-MODE SHELL ON THE DEVICE -- fine for apt / wget / map downloads; no vim/nano (use cat/sed). UP/DOWN = history.</div>
         </div>
       </section>
 
@@ -1562,7 +1573,11 @@ const VehArt = {
     // "that's a bottom view, not god's eye").
     this.tilt = (Config.data.veh_view || "top34") === "side" ? -0.35 : -0.95;
     if ((Config.data.veh_spin || "off") === "on") this.rot += 0.006;
-    else this.rot += (-0.7 - this.rot) * 0.08;   // ease to the fixed 3/4 angle
+    else {
+      // Ease toward the user-chosen resting angle (◄/► buttons); default 3/4.
+      const target = Config.data.veh_angle != null ? Config.data.veh_angle : -0.7;
+      this.rot += (target - this.rot) * 0.12;
+    }
     const ctx = cv.getContext("2d");
     ctx.clearRect(0, 0, cw, ch);
     const color = getComputedStyle(document.documentElement).getPropertyValue("--pri").trim() || "#ffb000";
@@ -1623,6 +1638,12 @@ function renderVehicle(t) {
   VehArt.setOpen(doors);
   VehArt.tires = (t && t.tires) || null;
   if (!VehArt.started) { VehArt.started = true; requestAnimationFrame((ts) => VehArt.tick(ts)); }
+  // Manual rotate only makes sense for the 3D wireframe sitting still.
+  const rotRow = $("#veh-rotate-row");
+  if (rotRow) {
+    const show = (Config.data.veh_style || "3d") === "3d" && (Config.data.veh_spin || "off") === "off";
+    rotRow.style.display = show ? "" : "none";
+  }
   const names = Object.assign({}, VEH_NAMES,
     { trunk: vbody === "truck" ? "TAILGATE" : (vbody === "hatch" ? "HATCH" : "TRUNK"),
       hood: vbody === "sedan" || vbody === "van" ? "HOOD" : VEH_NAMES.hood });
@@ -1958,7 +1979,21 @@ function selectGuideChan(chan) {
 function renderGuideMain() {
   const main = $("#guide-main");
   main.innerHTML = "";
-  if (!Guide.selectedChan) { main.appendChild(el("div", { class: "dim" }, ["SELECT A CHANNEL"])); return; }
+  if (!Guide.selectedChan) {
+    // First-run guidance -- a blank panel taught nobody anything (bailey:
+    // "tv and guide need to be a little more user friendly").
+    const help = el("div", { class: "dim", style: "line-height:2; max-width:560px;" }, []);
+    help.innerHTML =
+      "PROGRAM THE STATION -- how to schedule like a broadcast day:<br>" +
+      "&gt; 1. Pick a channel on the left (ENTER). 00 COMMERCIALS is the filler pool.<br>" +
+      "&gt; 2. Pick a weekday, then ENTER on a time block to assign a video file.<br>" +
+      "&gt; 3. SAVE writes the schedule -- shows air at their block, minute-accurate.<br>" +
+      "&gt; Gaps on a programmed channel play commercials/static, never reruns.<br>" +
+      "&gt; Channels with files but NO schedule just rotate 24/7 on their own.<br>" +
+      "&gt; Pick a channel and use [ RENAME CHANNEL ] to name it.";
+    main.appendChild(help);
+    return;
+  }
   const isCommercials = Guide.selectedChan === "00";
 
   const addBtn = el("button", { "data-focus": "" }, ["[ + ADD FILES ]"]);
@@ -2478,7 +2513,7 @@ const Nav = {
       if (resp.ok) maps = (await resp.json()).maps || [];
     } catch (e) { /* no backend -- standalone/demo */ }
     if (!maps.length) {
-      this.showFallback("NO OFFLINE MAP DATA -- drop a .pmtiles region file into /opt/gost/maps via SSH (free extracts at protomaps.com/downloads).");
+      this.showFallback("NO OFFLINE MAP DATA -- open the TERM tab and run:  wget -P /opt/gost/maps <url of a .pmtiles region>  (free region extracts at protomaps.com/downloads), or put a .pmtiles in a maps/ folder on a USB stick. Reboot after -- the map loads automatically.");
       return;
     }
     try {
@@ -2786,6 +2821,14 @@ function buildSettings() {
   $("#veh-view-side").addEventListener("click", () => setVeh("veh_view", "side"));
   $("#veh-spin-on").addEventListener("click", () => setVeh("veh_spin", "on"));
   $("#veh-spin-off").addEventListener("click", () => setVeh("veh_spin", "off"));
+  const nudge = (d) => {
+    // Turn off spin when the user manually aims, then step the resting angle.
+    if ((Config.data.veh_spin || "off") === "on") { Config.set("veh_spin", "off"); updateVehButtons(); }
+    const cur = Config.data.veh_angle != null ? Config.data.veh_angle : VehArt.rot;
+    Config.set("veh_angle", cur + d);
+  };
+  $("#veh-rot-left").addEventListener("click", () => nudge(-0.4));
+  $("#veh-rot-right").addEventListener("click", () => nudge(0.4));
   updateVehButtons();
   const setUnit = (key, val) => { Config.set(key, val); updateUnitButtons(); };
   $("#unit-f-btn").addEventListener("click", () => setUnit("units_temp", "F"));
