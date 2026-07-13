@@ -1148,6 +1148,11 @@ class Telemetry:
         cyc = int(t / 6) % 8
         self.doors = {"fl": cyc == 1, "fr": cyc == 3, "rl": False, "rr": False,
                       "hood": cyc == 5, "trunk": cyc == 7}
+        # Simulated TPMS: right-rear runs low half the time so the low-tire
+        # glow + PSI callout has something to show.
+        low = int(t / 20) % 2 == 1
+        self.tires = {"fl": 36.0, "fr": 35.5, "rl": 36.0,
+                      "rr": 27.5 if low else 34.0}
 
     async def poll_loop(self):
         last_slow = 0.0
@@ -1215,6 +1220,7 @@ class Telemetry:
                     except Exception:
                         pass
                 self.doors = None  # door status needs body-control PIDs (TBD)
+                self.tires = None  # TPMS is Ford mode-22, unmapped -- honest null
                 got = await self.poll_fast()
                 now = time.time()
                 if now - last_slow > 2:
@@ -1274,6 +1280,7 @@ class Telemetry:
             "obd_status": self.obd_status,
             "obd_port": self.obd_port,
             "doors": getattr(self, "doors", None),
+            "tires": getattr(self, "tires", None),
             "carplay": carplay_dongle(),
         }
 
