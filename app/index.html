@@ -299,35 +299,14 @@ a { color: var(--pri); }
         <div id="hud-status-line"></div>
       </section>
 
-      <!-- VEHICLE = body status: top-down truck, doors/hood/tailgate light
-           up + swing open when ajar. -->
+      <!-- VEHICLE = body status as an oscilloscope-style rotating 3D
+           wireframe (bailey's vector-CRT reference); doors/hood/tailgate
+           swing open in 3D when ajar. Geometry follows the wizard's
+           vehicle profile. -->
       <section id="tab-vehicle" class="tab">
-        <div class="frame" data-title="VEHICLE STATUS" style="height:100%; text-align:center;">
+        <div class="frame" data-title="VEHICLE STATUS" style="height:100%; text-align:center; display:flex; flex-direction:column;">
           <div id="veh-banner" class="dim" style="font-size:12px; margin:4px 0;"></div>
-          <svg id="veh-svg" viewBox="0 0 300 470" style="height:72%; max-width:100%;">
-            <!-- body -->
-            <rect x="70" y="30" width="160" height="410" rx="30" class="veh-body"/>
-            <!-- windshield / rear glass -->
-            <line x1="80" y1="150" x2="220" y2="150" class="veh-line"/>
-            <line x1="80" y1="330" x2="220" y2="330" class="veh-line"/>
-            <rect x="95" y="160" width="110" height="60" rx="8" class="veh-line"/>
-            <!-- hood / frunk -->
-            <path id="veh-hood" class="veh-part" d="M80 40 Q150 20 220 40 L220 120 L80 120 Z"/>
-            <!-- doors -->
-            <rect id="veh-fl" class="veh-part door-l" x="52" y="160" width="18" height="80" rx="4"/>
-            <rect id="veh-rl" class="veh-part door-l" x="52" y="250" width="18" height="80" rx="4"/>
-            <rect id="veh-fr" class="veh-part door-r" x="230" y="160" width="18" height="80" rx="4"/>
-            <rect id="veh-rr" class="veh-part door-r" x="230" y="250" width="18" height="80" rx="4"/>
-            <!-- truck bed (profile: body=truck only) -->
-            <g id="veh-bed" class="veh-line">
-              <line x1="85" y1="345" x2="215" y2="345"/>
-              <line x1="85" y1="360" x2="215" y2="360"/>
-              <line x1="85" y1="375" x2="215" y2="375"/>
-              <line x1="85" y1="390" x2="215" y2="390"/>
-            </g>
-            <!-- trunk / tailgate -->
-            <rect id="veh-trunk" class="veh-part" x="80" y="400" width="140" height="34" rx="6"/>
-          </svg>
+          <canvas id="veh3d" style="flex:1; width:100%; min-height:0;"></canvas>
           <div id="veh-open-list" class="glow" style="font-size:15px; min-height:20px;"></div>
         </div>
       </section>
@@ -1363,31 +1342,155 @@ function renderHud(t) {
  * ========================================================================== */
 const VEH_NAMES = { fl: "DRIVER DOOR", fr: "PASSENGER DOOR", rl: "REAR LEFT DOOR",
   rr: "REAR RIGHT DOOR", hood: "HOOD/FRUNK", trunk: "TRUNK/TAILGATE" };
+
+/* Oscilloscope-style rotating 3D wireframe (bailey's vector-CRT reference:
+ * the scope-Saturn look, but solid glowing lines). Geometry is built from
+ * the wizard's vehicle profile; ajar panels swing open in 3D and pulse. */
+const VehArt = {
+  body: null, doorCount: 0, segs: [], parts: {}, anim: {}, open: {},
+  rot: -0.6, started: false,
+
+  profile(body, doorCount) {
+    if (body === this.body && doorCount === this.doorCount) return;
+    this.body = body; this.doorCount = doorCount;
+    this.build();
+  },
+  setOpen(o) {
+    this.open = o || {};
+    for (const k of Object.keys(this.parts)) {
+      if (this.anim[k] == null) this.anim[k] = 0;
+    }
+  },
+
+  build() {
+    const W = 0.95, segs = [], parts = {};
+    // Side silhouettes (x = length, front +x; y = up). Picked to read as
+    // their body style at a glance on a 5" screen.
+    const OUTLINES = {
+      truck: [[2.2,.35],[2.2,.6],[2.05,.8],[1.05,.9],[.5,1.45],[-.45,1.45],[-.5,.95],[-2.1,.95],[-2.1,.35]],
+      suv:   [[2.2,.35],[2.2,.6],[2.0,.85],[1.0,.95],[.5,1.5],[-1.85,1.5],[-2.1,1.0],[-2.1,.35]],
+      sedan: [[2.2,.35],[2.2,.55],[2.0,.75],[.9,.85],[.35,1.35],[-1.1,1.35],[-1.9,.95],[-2.1,.9],[-2.1,.35]],
+      van:   [[2.2,.35],[2.2,.7],[1.9,1.1],[1.55,1.55],[-2.0,1.55],[-2.1,1.0],[-2.1,.35]],
+    };
+    let ol = OUTLINES[this.body] || OUTLINES.truck;
+    if (this.body === "truck" && this.doorCount === 2) {
+      ol = [[2.2,.35],[2.2,.6],[2.05,.8],[1.05,.9],[.5,1.45],[-.05,1.45],[-.1,.95],[-2.1,.95],[-2.1,.35]];
+    }
+    const Lp = ol.map(([x,y]) => [x,y,-W]), Rp = ol.map(([x,y]) => [x,y,W]);
+    for (const S of [Lp,Rp]) for (let i = 0; i < S.length - 1; i++) segs.push([S[i], S[i+1]]);
+    segs.push([Lp[0], Lp[Lp.length-1]]); segs.push([Rp[0], Rp[Rp.length-1]]);
+    for (let i = 0; i < ol.length; i++) segs.push([Lp[i], Rp[i]]);
+    if (this.body === "truck") {           // bed front wall
+      const bx = this.doorCount === 2 ? -0.1 : -0.5;
+      segs.push([[bx,.95,-W],[bx,.4,-W]]); segs.push([[bx,.95,W],[bx,.4,W]]);
+      segs.push([[bx,.4,-W],[bx,.4,W]]);
+    }
+    for (const z of [-W,W]) for (const wx of [1.45,-1.45]) {  // wheels: 12-gons
+      const n = 12, r = 0.34, pts = [];
+      for (let i = 0; i < n; i++) pts.push([wx + r*Math.cos(i/n*2*Math.PI), .35 + r*Math.sin(i/n*2*Math.PI), z]);
+      for (let i = 0; i < n; i++) segs.push([pts[i], pts[(i+1)%n]]);
+    }
+
+    // Hinged panels: quad corners + a transform(point, angle) closure.
+    const doorQuad = (x1, x2, z) => [[x1,.45,z],[x2,.45,z],[x2,1.3,z],[x1,1.3,z]];
+    const door = (x1, x2, side) => ({
+      quad: doorQuad(x1, x2, side * (W + .02)),
+      xf: (p, a) => {                       // swing outward around front edge
+        const dx = p[0] - x1;
+        return [x1 + dx*Math.cos(a), p[1], p[2] + side * (-dx) * Math.sin(a)];
+      },
+    });
+    parts.fl = door(.9, .1, -1); parts.fr = door(.9, .1, 1);
+    if (this.doorCount === 4) { parts.rl = door(.1, -.65, -1); parts.rr = door(.1, -.65, 1); }
+    parts.hood = {                          // lifts at the windshield hinge
+      quad: [[2.05,.82,-.8],[2.05,.82,.8],[1.08,.9,.8],[1.08,.9,-.8]],
+      xf: (p, a) => {
+        const dx = p[0] - 1.08, dy = p[1] - .9;
+        return [1.08 + dx*Math.cos(a) - dy*Math.sin(a), .9 + dx*Math.sin(a) + dy*Math.cos(a), p[2]];
+      },
+    };
+    parts.trunk = this.body === "truck"
+      ? { quad: [[-2.08,.95,-W],[-2.08,.95,W],[-2.08,.4,W],[-2.08,.4,-W]],  // tailgate drops
+          xf: (p, a) => {
+            const dy = p[1] - .4;
+            return [-2.08 - dy*Math.sin(a), .4 + dy*Math.cos(a), p[2]];
+          } }
+      : { quad: [[-1.9,1.02,-.8],[-1.9,1.02,.8],[-2.08,.6,.8],[-2.08,.6,-.8]],  // decklid lifts
+          xf: (p, a) => {
+            const dx = p[0] + 1.9, dy = p[1] - 1.02;
+            return [-1.9 + dx*Math.cos(a) + dy*Math.sin(a), 1.02 - dx*Math.sin(a) + dy*Math.cos(a), p[2]];
+          } };
+    this.segs = segs; this.parts = parts;
+  },
+
+  proj(p, cw, ch) {
+    const cy = Math.cos(this.rot), sy = Math.sin(this.rot);
+    let X = p[0]*cy + p[2]*sy, Z = -p[0]*sy + p[2]*cy;
+    const y = p[1] - 0.85;                  // center vertically
+    const tilt = 0.42, ct = Math.cos(tilt), st = Math.sin(tilt);
+    const Y = y*ct - Z*st, Z2 = y*st + Z*ct;
+    const s = 5 / (5 + Z2) * Math.min(cw, ch) * 0.32;
+    return [cw/2 + X*s, ch/2 - Y*s];
+  },
+
+  tick(ts) {
+    requestAnimationFrame((t) => this.tick(t));
+    const cv = $("#veh3d");
+    const tab = $("#tab-vehicle");
+    if (!cv || !tab || !tab.classList.contains("active")) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cw = cv.clientWidth * dpr, ch = cv.clientHeight * dpr;
+    if (cv.width !== cw || cv.height !== ch) { cv.width = cw; cv.height = ch; }
+    if (!cw || !ch) return;
+    if (!this.body) this.profile("truck", 4);
+    this.rot += 0.006;
+    const ctx = cv.getContext("2d");
+    ctx.clearRect(0, 0, cw, ch);
+    const color = getComputedStyle(document.documentElement).getPropertyValue("--pri").trim() || "#ffb000";
+    ctx.lineWidth = 1.6 * dpr;
+    ctx.strokeStyle = color;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 9 * dpr;               // the phosphor glow
+    ctx.lineCap = "round";
+    const line = (a, b) => {
+      const A = this.proj(a, cw, ch), B = this.proj(b, cw, ch);
+      ctx.beginPath(); ctx.moveTo(A[0], A[1]); ctx.lineTo(B[0], B[1]); ctx.stroke();
+    };
+    ctx.globalAlpha = 0.9;
+    for (const [a, b] of this.segs) line(a, b);
+    // Panels: ease toward open/closed; ajar ones pulse brighter.
+    for (const [name, part] of Object.entries(this.parts)) {
+      const target = this.open[name] ? 1 : 0;
+      this.anim[name] = (this.anim[name] || 0) + (target - (this.anim[name] || 0)) * 0.12;
+      const amt = this.anim[name];
+      const ang = amt * 0.96;               // ~55 degrees fully open
+      const q = part.quad.map((p) => (ang > 0.01 ? part.xf(p, ang) : p));
+      const ajar = amt > 0.05;
+      ctx.globalAlpha = ajar ? 0.75 + 0.25 * Math.sin(ts / 160) : 0.9;
+      ctx.lineWidth = (ajar ? 2.4 : 1.6) * dpr;
+      for (let i = 0; i < 4; i++) line(q[i], q[(i+1) % 4]);
+      if (ajar) { line(q[0], q[2]); line(q[1], q[3]); }  // X-brace = solid read
+    }
+    ctx.globalAlpha = 1;
+  },
+};
+
 function renderVehicle(t) {
   const banner = $("#veh-banner"), list = $("#veh-open-list");
   if (!banner) return;
-  // Profile from setup wizard / Settings: a Slate is a 2-door truck, an R2
-  // a 4-door SUV -- the diagram should be THEIR vehicle, not a generic one.
   const vbody = Config.data.veh_body || "truck";
   const vdoors = Number(Config.data.veh_doors) || 4;
-  const twoDoor = vdoors === 2;
-  const bed = $("#veh-bed");
-  if (bed) bed.style.display = vbody === "truck" ? "" : "none";
-  for (const p of ["rl", "rr"]) {
-    const d = $("#veh-" + p);
-    if (d) d.style.display = twoDoor ? "none" : "";
-  }
+  VehArt.profile(vbody, vdoors);
+  const doors = t && t.doors;
+  VehArt.setOpen(doors);
+  if (!VehArt.started) { VehArt.started = true; requestAnimationFrame((ts) => VehArt.tick(ts)); }
   const names = Object.assign({}, VEH_NAMES,
     { trunk: vbody === "truck" ? "TAILGATE" : "TRUNK",
       hood: vbody === "sedan" || vbody === "van" ? "HOOD" : VEH_NAMES.hood });
-  const doors = t && t.doors;
   const open = [];
   for (const p of Object.keys(names)) {
-    if (twoDoor && (p === "rl" || p === "rr")) continue;
-    const part = $("#veh-" + p);
-    const isOpen = !!(doors && doors[p]);
-    if (part) part.classList.toggle("open", isOpen);
-    if (isOpen) open.push(names[p]);
+    if (vdoors === 2 && (p === "rl" || p === "rr")) continue;
+    if (doors && doors[p]) open.push(names[p]);
   }
   if (!doors) {
     // Standard OBD has no door PIDs -- Ford exposes them via BCM-specific
