@@ -208,6 +208,10 @@ systemctl daemon-reload
 # the kiosk wanted only by the never-reached graphical.target.
 systemctl disable hud-backend.service hud-kiosk.service 2>/dev/null || true
 systemctl enable obd-rfcomm.service 2>/dev/null || true
+
+# Force the Wi-Fi radio on at every boot (bailey: it boots soft-disabled).
+install -m0644 "$GOST_HOME/system/gost-net.service" /etc/systemd/system/gost-net.service
+systemctl enable gost-net.service 2>/dev/null || true
 systemctl enable hud-backend.service
 systemctl enable hud-kiosk.service
 # Pi OS Lite already defaults to multi-user.target, but pin it so nothing

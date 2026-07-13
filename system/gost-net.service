@@ -1,0 +1,17 @@
+[Unit]
+Description=GOST: ensure Wi-Fi radio is enabled at every boot
+# NetworkManager can come up with the Wi-Fi radio soft-disabled (nmcli radio
+# wifi = off); nothing re-enables it until a manual join, so WiFi looks dead
+# on boot (bailey 2026-07-14). Force it on before the kiosk needs the network.
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=-/usr/sbin/rfkill unblock wifi
+ExecStart=-/usr/bin/nmcli radio wifi on
+ExecStart=-/usr/bin/nmcli networking on
+
+[Install]
+WantedBy=multi-user.target
