@@ -182,12 +182,29 @@ for unit in hud-backend.service hud-kiosk.service; do
   sed "s/__GOST_USER__/$GOST_USER/g" "$GOST_HOME/system/$unit" > "/etc/systemd/system/$unit"
 done
 
+# OBD-over-Bluetooth (Part 1): OBDLink MX+ SPP link. Non-destructive -- ships
+# its own unit + a drop-in that only adds ordering to the backend.
+if command -v rfcomm >/dev/null 2>&1; then
+  install -m0644 "$GOST_HOME/system/bluetooth-main.conf" /etc/bluetooth/main.conf
+  install -m0755 "$GOST_HOME/system/obd-bt-pair.sh"      /usr/local/bin/obd-bt-pair.sh
+  install -m0755 "$GOST_HOME/system/obd-rfcomm-link.sh"  /usr/local/bin/obd-rfcomm-link.sh
+  install -m0644 "$GOST_HOME/system/obd-rfcomm.service"  /etc/systemd/system/obd-rfcomm.service
+  install -d /etc/systemd/system/hud-backend.service.d
+  install -m0644 "$GOST_HOME/system/hud-backend.service.d/10-rfcomm.conf" \
+    /etc/systemd/system/hud-backend.service.d/10-rfcomm.conf
+  command -v sdptool >/dev/null 2>&1 || \
+    log "WARNING: sdptool absent -- SPP channel auto-discovery off; pinning channel 1"
+else
+  log "WARNING: rfcomm not present (bluez) -- OBD Bluetooth transport unavailable; USB OBD still works"
+fi
+
 systemctl daemon-reload
 # Disable first so a stale wants-symlink from an earlier install (e.g. the
 # old graphical.target.wants/hud-kiosk.service) is removed before we re-point
 # it at multi-user.target. Without this, re-running the installer would leave
 # the kiosk wanted only by the never-reached graphical.target.
 systemctl disable hud-backend.service hud-kiosk.service 2>/dev/null || true
+systemctl enable obd-rfcomm.service 2>/dev/null || true
 systemctl enable hud-backend.service
 systemctl enable hud-kiosk.service
 # Pi OS Lite already defaults to multi-user.target, but pin it so nothing

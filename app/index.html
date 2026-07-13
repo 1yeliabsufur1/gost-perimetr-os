@@ -222,6 +222,13 @@ a { color: var(--pri); }
 
 /* ---- NAV ---- */
 #nav-map { position:absolute; inset: 14px 20px; }
+/* Big weather readout over the map (Part 5, bailey) */
+#wx-map { position:absolute; top:26px; right:34px; z-index:20; pointer-events:none;
+  display:flex; flex-direction:column; align-items:center; color:var(--pri);
+  text-shadow:0 0 8px var(--glow), 0 0 20px var(--glow); }
+#wx-map.wx-stale { opacity:0.5; }
+#wx-map-icon { font-size:52px; line-height:1; }
+#wx-map-temp { font-size:20px; letter-spacing:1px; margin-top:2px; }
 #nav-fallback { padding: 20px; }
 #nav-radar { display:block; margin: 20px auto; }
 #nav-crosshair {
@@ -306,6 +313,7 @@ a { color: var(--pri); }
           <div class="frame" data-title="TIRES (PSI)"><div id="drive-tires-box" style="font-size:13px;"></div></div>
           <div class="frame" data-title="LIVE DATA (RAW PIDS)"><div id="drive-raw-box" style="font-size:12px; font-family:inherit;"></div></div>
           <div style="margin-top:8px;">
+            <button data-focus id="drive-readcodes-btn">[ READ CODES NOW ]</button>
             <button data-focus id="drive-diag-btn">[ RUN OBD DIAGNOSTIC ]</button>
             <span id="drive-diag-status" class="dim"></span>
           </div>
@@ -398,6 +406,9 @@ a { color: var(--pri); }
       </section>
 
       <section id="tab-nav" class="tab">
+        <!-- Big amber weather readout over the map (bailey); driven by the
+             same Weather module as the corner widget, degrades identically. -->
+        <div id="wx-map"><span id="wx-map-icon">◌</span><span id="wx-map-temp">WX --</span></div>
         <div id="nav-map" class="hidden"></div>
         <div id="nav-crosshair" class="hidden">+</div>
         <div id="nav-hud" class="hidden">
@@ -810,6 +821,9 @@ const Net = {
       // with no confirmation anywhere after a good join.
       if (msg.ok) setTimeout(() => { if (Modal.isOpen()) Modal.close(); }, 1800);
     }
+    else if (msg.type === "obd.readcodes") {
+      if (window.setDiagStatus) window.setDiagStatus(msg.ok ? (msg.count + " CODE(S) STORED") : ("NO LINK: " + (msg.detail || "")));
+    }
     else if (msg.type === "obd.diag") {
       if (window.setDiagStatus) window.setDiagStatus("DONE");
       Modal.open("OBD DIAGNOSTIC", (body) => {
@@ -908,10 +922,17 @@ const Weather = {
   },
   paint(icon, temp, live) {
     const w = $("#wx-widget"), i = $("#wx-icon"), t = $("#wx-temp");
-    if (!w) return;
-    i.textContent = icon; t.textContent = temp;
-    w.classList.toggle("wx-live", !!live);
-    w.classList.toggle("wx-stale", !live);
+    if (w) {
+      i.textContent = icon; t.textContent = temp;
+      w.classList.toggle("wx-live", !!live);
+      w.classList.toggle("wx-stale", !live);
+    }
+    // Big readout over the NAV map -- same data, prominent amber.
+    const mi = $("#wx-map-icon"), mt = $("#wx-map-temp"), mw = $("#wx-map");
+    if (mw) {
+      mi.textContent = icon; mt.textContent = temp;
+      mw.classList.toggle("wx-stale", !live);
+    }
   },
   async tick() {
     const fix = (typeof Nav !== "undefined" && Nav.lastFix) ? Nav.lastFix : null;
@@ -2976,6 +2997,11 @@ function buildSettings() {
   window.setDiagStatus = setDiagStatus;
   $("#obd-diag-btn").addEventListener("click", startDiag);
   $("#drive-diag-btn").addEventListener("click", startDiag);
+  $("#drive-readcodes-btn").addEventListener("click", () => {
+    if (!Net.connected) { setDiagStatus("REQUIRES DEVICE"); return; }
+    setDiagStatus("READING CODES...");
+    Net.send({ type: "obd.readcodes" });
+  });
   $("#term-in").addEventListener("keydown", (e) => {
     if (e.key === "Enter") { e.preventDefault(); Term.submit(); }
     else if (e.key === "ArrowUp" && Term.history.length) {

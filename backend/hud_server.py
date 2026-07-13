@@ -705,27 +705,43 @@ class RawOBD:
         letter = "PCBU"[(a & 0xC0) >> 6]
         return f"{letter}{(a & 0x30) >> 4}{a & 0x0F:X}{(b & 0xF0) >> 4:X}{b & 0x0F:X}"
 
-    def read_dtcs(self):
-        """Mode 03 -- stored trouble codes. Returns [(code, ''), ...]."""
-        resp = self._cmd("03", 0.4)
-        up = resp.upper()
-        if "NO DATA" in up or "ERROR" in up or "UNABLE" in up:
-            return []
-        toks = self._hex_tokens(resp)
+    def _parse_dtc_line(self, toks, mode_byte, letter_default):
+        """Parse one ECU's mode-03/07/0A response line into codes."""
         try:
-            idx = next(i for i, t in enumerate(toks) if t.upper() == "43")
+            idx = next(i for i, t in enumerate(toks) if t.upper() == mode_byte)
         except StopIteration:
             return []
         rest = toks[idx + 1:]
-        if len(rest) % 2 == 1:   # leading DTC-count byte (CAN) -> skip
+        if len(rest) % 2 == 1:   # leading DTC-count byte (CAN 11-bit) -> skip
             rest = rest[1:]
         out = []
         for i in range(0, len(rest) - 1, 2):
             a, b = int(rest[i], 16), int(rest[i + 1], 16)
             if a == 0 and b == 0:
                 continue
-            out.append((self._decode_dtc(a, b), ""))
+            out.append(self._decode_dtc(a, b))
         return out
+
+    def read_dtcs(self):
+        """Read ALL trouble codes the truck stores, across all responding ECUs:
+        mode 03 (stored/confirmed -- MIL on), 07 (pending -- seen this drive
+        cycle, MIL not yet on) and 0A (permanent -- can't be cleared until the
+        ECU re-verifies). The F-150 answers on 3 ECUs, each on its own line;
+        earlier we only read the FIRST line of mode 03, so pending/permanent
+        codes and other-ECU codes never showed (bailey: 'not displaying past
+        codes'). Returns [(code, kind), ...]."""
+        seen = {}
+        for mode_byte, kind in (("43", "stored"), ("47", "pending"), ("4A", "permanent")):
+            cmd = {"43": "03", "47": "07", "4A": "0A"}[mode_byte]
+            resp = self._cmd(cmd, 0.4)
+            up = resp.upper()
+            if "NO DATA" in up or "ERROR" in up or "UNABLE" in up:
+                continue
+            # Each ECU replies on its own line -> parse every line, not just one.
+            for line in resp.replace("\r", "\n").split("\n"):
+                for code in self._parse_dtc_line(self._hex_tokens(line), mode_byte, None):
+                    seen.setdefault(code, kind)   # first-seen kind wins
+        return [(c, k) for c, k in seen.items()]
 
     def close(self):
         try:
@@ -833,10 +849,12 @@ class Telemetry:
         await asyncio.sleep(0.6)   # let poll_loop notice + release the port
         self._close_obd()
         try:
-            ports = sorted(glob.glob("/dev/ttyUSB*") + glob.glob("/dev/ttyACM*"))
+            ports = sorted(glob.glob("/dev/rfcomm*")) + \
+                sorted(glob.glob("/dev/ttyUSB*") + glob.glob("/dev/ttyACM*"))
             lines = [f"PORTS: {', '.join(ports) if ports else 'NONE FOUND'}"]
             if not ports:
-                lines.append("No adapter -- check USB cable / it's plugged into OBD.")
+                lines.append("No adapter. USB: check cable. Bluetooth MX+: run")
+                lines.append("  sudo obd-bt-pair.sh   (once, in the truck) then reboot.")
                 return "\n".join(lines)
             port = ports[0]
             for proto in ("6", "7", "8", None):
@@ -878,12 +896,15 @@ class Telemetry:
             self.obd_status = "python-obd not installed"
             return False
         import glob
-        # ELM327 adapters enumerate as ttyUSB* (FTDI/CH340) or ttyACM* (native
-        # USB CDC). OBDLink EX is usually ttyUSB0 at 115200; clones vary.
-        ports = sorted(glob.glob("/dev/ttyUSB*") + glob.glob("/dev/ttyACM*"))
+        # /dev/rfcomm0 = OBDLink MX+ over Bluetooth SPP, provided by the
+        # supervised obd-rfcomm.service (Part 1). Tried FIRST: it's the new
+        # primary adapter. USB ELM327s (OBDLink EX = ttyUSB*, native-CDC =
+        # ttyACM*) remain as fallback so both transports work from one build.
+        ports = sorted(glob.glob("/dev/rfcomm*")) + \
+            sorted(glob.glob("/dev/ttyUSB*") + glob.glob("/dev/ttyACM*"))
         if not ports:
             self.obd_linked = False
-            self.obd_status = "no adapter found (no /dev/ttyUSB* or /dev/ttyACM*)"
+            self.obd_status = "no adapter found (no /dev/rfcomm*, ttyUSB* or ttyACM*)"
             log("OBD:", self.obd_status)
             return False
 
@@ -1084,9 +1105,15 @@ class Telemetry:
                     codes = [(c, d or "") for c, d in (r.value or [])]
             now_iso = datetime.now().isoformat()
             changed = False
-            for code, desc in (codes or []):
-                if code and code not in self.dtcs:
-                    self.dtcs[code] = {"first_seen": now_iso, "desc": desc or ""}
+            for code, kind in (codes or []):
+                if not code:
+                    continue
+                label = (kind or "").upper()   # STORED / PENDING / PERMANENT
+                if code not in self.dtcs:
+                    self.dtcs[code] = {"first_seen": now_iso, "desc": label}
+                    changed = True
+                elif label and self.dtcs[code].get("desc") != label:
+                    self.dtcs[code]["desc"] = label
                     changed = True
             if changed:
                 self.dtc_path.write_text(json.dumps(self.dtcs, indent=2))
@@ -1874,6 +1901,16 @@ async def route_message(state: GostState, ws, msg):
     elif t == "obd.diag":
         result = await state.telemetry.run_diag()
         await ws.send(json.dumps({"type": "obd.diag", "result": result}))
+    elif t == "obd.readcodes":
+        # Manual, immediate DTC scan (bailey: don't wait 30s for the poll).
+        tel = state.telemetry
+        if tel.use_raw and tel.raw or tel.conn:
+            await tel.poll_dtc()
+            await ws.send(json.dumps({"type": "obd.readcodes", "ok": True,
+                                      "count": len(tel.dtcs)}))
+        else:
+            await ws.send(json.dumps({"type": "obd.readcodes", "ok": False,
+                                      "detail": "no live OBD link"}))
     elif t == "term.input":
         if not hasattr(state, "term"):
             state.term = TermSession(state.broadcast)
