@@ -46,6 +46,20 @@ a { color: var(--pri); }
 .hidden { display: none !important; }
 .glow { text-shadow: 0 0 4px var(--glow), 0 0 14px var(--glow); }
 .dim { color: var(--dim); }
+/* Weather corner widget (Part 5) */
+#wx-widget { font-size: 13px; white-space: nowrap; }
+#wx-widget.wx-stale { opacity: 0.55; }
+#wx-widget.wx-live { color: var(--pri); }
+/* Fault bus overlay (Part 2 §8): stacked amber readouts, top-right under the
+   status bar. Pointer-events off so it never eats touches. */
+#fault-overlay { position: absolute; top: 40px; right: 10px; z-index: 60;
+  display: flex; flex-direction: column; gap: 6px; pointer-events: none; }
+.fault-chip { border: 1px solid var(--pri); background: rgba(0,0,0,0.72);
+  color: var(--pri); font-size: 12px; letter-spacing: 1px; padding: 4px 10px;
+  text-shadow: 0 0 6px var(--glow); box-shadow: 0 0 10px rgba(0,0,0,0.6);
+  animation: fault-pulse 2s ease-in-out infinite; }
+.fault-chip.crit { color: var(--bg); background: var(--pri); font-weight: bold; }
+@keyframes fault-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.6; } }
 /* VEHICLE tab: CRT-outline truck; ajar parts fill + swing open. */
 .veh-body, .veh-line { fill: none; stroke: var(--dim); stroke-width: 2; }
 .veh-part { fill: none; stroke: var(--pri); stroke-width: 2.5; transition: transform .4s, fill .3s; transform-box: fill-box; }
@@ -264,8 +278,15 @@ a { color: var(--pri); }
   <div id="shell" class="screen hidden">
     <header id="statusbar">
       <div><span class="dot" id="conn-dot"></span><span id="conn-label">OFFLINE</span> // <span id="src-label">AUTO</span></div>
-      <div id="clock">00:00:00</div>
+      <div style="display:flex; align-items:center; gap:16px;">
+        <!-- Weather corner widget (Part 5): online-only, degrades to WX OFFLINE -->
+        <div id="wx-widget" class="dim" title="Open-Meteo"><span id="wx-icon">◌</span> <span id="wx-temp">WX --</span></div>
+        <div id="clock">00:00:00</div>
+      </div>
     </header>
+    <!-- Fault bus renderer (Part 2 §8): single in-world amber readout of every
+         subsystem fault; never blanks, never a dialog. -->
+    <div id="fault-overlay"></div>
 
     <main id="content">
       <section id="tab-home" class="tab">
@@ -755,6 +776,11 @@ const Net = {
   route(msg) {
     if (msg.type === "telemetry") {
       this.telemetry = msg; renderDrive(msg); renderHud(msg); renderVehicle(msg);
+      // OBD link state -> fault bus (Part 2 §8). Live real data clears it;
+      // SHOWCASE fallback / no adapter raises the honest СИГНАЛ ПОТЕРЯН.
+      if (msg.source_mode === "DEMO") FaultBus.clear("obd");
+      else if (msg.live) FaultBus.clear("obd");
+      else FaultBus.raise("obd", { label: "OBD: СИГНАЛ ПОТЕРЯН / SIGNAL LOST" });
       // CARPLAY tab appears/disappears with the physical dongle.
       if (!!msg.carplay !== !!CarplayInfo) {
         CarplayInfo = msg.carplay || null;
@@ -827,6 +853,104 @@ function updateConnIndicator() {
   $("#conn-dot").classList.toggle("on", Net.connected);
   $("#conn-label").textContent = Net.connected ? "ONLINE" : (Demo.running ? "PREVIEW" : "OFFLINE");
 }
+
+/* ============================================================================
+ * FAULT BUS (Part 2 §8) -- one place every subsystem publishes degraded
+ * states; one renderer draws them in-world. Never a dialog, never a blank.
+ * FaultBus.raise(id, {label, crit}); FaultBus.clear(id).
+ * ========================================================================== */
+const FaultBus = {
+  faults: {},
+  raise(id, opts) {
+    const label = (opts && opts.label) || id;
+    const crit = !!(opts && opts.crit);
+    const prev = this.faults[id];
+    if (prev && prev.label === label && prev.crit === crit) return;
+    this.faults[id] = { label, crit };
+    this.render();
+  },
+  clear(id) { if (this.faults[id]) { delete this.faults[id]; this.render(); } },
+  render() {
+    const box = $("#fault-overlay");
+    if (!box) return;
+    box.innerHTML = "";
+    for (const [id, f] of Object.entries(this.faults)) {
+      box.appendChild(el("div", { class: "fault-chip" + (f.crit ? " crit" : "") }, [f.label]));
+    }
+  },
+};
+
+/* ============================================================================
+ * WEATHER (Part 5) -- the ONE deliberately-online feature. Reads the shared
+ * GPS position, polls Open-Meteo, degrades honestly to WX OFFLINE / NO FIX
+ * through the fault bus. Never shows stale-as-live.
+ * ========================================================================== */
+const WMO_ICONS = [
+  [[0], "☀", "☽"],                 // clear: sun / moon
+  [[1,2,3], "⛅", "☁"],             // partly/cloudy
+  [[45,48], "▒"],                        // fog
+  [[51,52,53,54,55,56,57,61,62,63,64,65,66,67,80,81,82], "☔"], // rain
+  [[71,72,73,74,75,76,77,85,86], "❄"],  // snow
+  [[95,96,97,98,99], "⚡"],              // thunder
+];
+const Weather = {
+  timer: null, last: null,
+  icon(code, isDay) {
+    for (const row of WMO_ICONS) {
+      if (row[0].includes(code)) return (isDay === 0 && row[2]) ? row[2] : row[1];
+    }
+    return "◌";
+  },
+  start() {
+    if (this.timer) return;
+    this.tick();
+    this.timer = setInterval(() => this.tick(), 20 * 60 * 1000);  // 20 min: slow data, finite tier
+  },
+  paint(icon, temp, live) {
+    const w = $("#wx-widget"), i = $("#wx-icon"), t = $("#wx-temp");
+    if (!w) return;
+    i.textContent = icon; t.textContent = temp;
+    w.classList.toggle("wx-live", !!live);
+    w.classList.toggle("wx-stale", !live);
+  },
+  async tick() {
+    const fix = (typeof Nav !== "undefined" && Nav.lastFix) ? Nav.lastFix : null;
+    if (!fix) {
+      FaultBus.raise("wx", { label: "WX NO FIX" });
+      this.showLastOr("WX NO FIX");
+      return;
+    }
+    const unit = (Config.data.units_temp === "C") ? "celsius" : "fahrenheit";
+    const url = "https://api.open-meteo.com/v1/forecast?latitude=" + fix.lat.toFixed(3) +
+      "&longitude=" + fix.lon.toFixed(3) +
+      "&current=temperature_2m,weather_code,is_day&temperature_unit=" + unit + "&timezone=auto";
+    try {
+      const ctrl = new AbortController();
+      const to = setTimeout(() => ctrl.abort(), 8000);   // never block the UI
+      const r = await fetch(url, { signal: ctrl.signal });
+      clearTimeout(to);
+      if (!r.ok) throw new Error("http " + r.status);
+      const j = await r.json();
+      const c = j.current;
+      const deg = Math.round(c.temperature_2m) + "°" + (unit === "celsius" ? "C" : "F");
+      this.last = { icon: this.icon(c.weather_code, c.is_day), temp: deg, ts: Date.now() };
+      FaultBus.clear("wx");
+      this.paint(this.last.icon, this.last.temp, true);
+    } catch (e) {
+      // Offline / timeout / fetch fail -> honest degraded state, cached marked stale.
+      FaultBus.raise("wx", { label: "WX OFFLINE" });
+      this.showLastOr("WX OFFLINE");
+    }
+  },
+  showLastOr(fallback) {
+    if (this.last) {
+      const hhmm = new Date(this.last.ts).toTimeString().slice(0, 5);
+      this.paint(this.last.icon, this.last.temp + " " + hhmm, false);   // dim + timestamp = not live
+    } else {
+      this.paint("◌", fallback, false);
+    }
+  },
+};
 
 function onConfigSynced() {
   applyTheme(Config.data.theme || "gost");
@@ -3019,6 +3143,7 @@ document.addEventListener("DOMContentLoaded", () => {
   renderTvChannelList();
   renderGuideChannelList();
   Net.connect();
+  Weather.start();   // Part 5: online weather; degrades to WX OFFLINE via fault bus
 
   if (!Config.data.setup_done) {
     showScreen("wizard");
