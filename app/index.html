@@ -1429,7 +1429,7 @@ const VehArt = {
     const y = p[1] - 0.85;                  // center vertically
     const tilt = 0.42, ct = Math.cos(tilt), st = Math.sin(tilt);
     const Y = y*ct - Z*st, Z2 = y*st + Z*ct;
-    const s = 5 / (5 + Z2) * Math.min(cw, ch) * 0.32;
+    const s = 8 / (8 + Z2) * Math.min(cw, ch) * 0.19;
     return [cw/2 + X*s, ch/2 - Y*s];
   },
 
