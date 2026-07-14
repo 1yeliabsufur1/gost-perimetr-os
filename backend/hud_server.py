@@ -847,6 +847,99 @@ class RawOBD:
             pass
 
 
+def _obd_capture_dir():
+    """FAT boot partition dir so captures are pullable from a PC / over SSH."""
+    for base in ("/boot/firmware", "/boot"):
+        try:
+            if os.path.isdir(base) and os.access(base, os.W_OK):
+                d = base + "/gost-obd"
+                os.makedirs(d, exist_ok=True)
+                return d
+        except Exception:
+            continue
+    d = str(STATE_DIR / "obd-capture")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+# Curated Ford mode-22 DIDs to try (door/oil-life/TPMS candidates), plus a
+# modest range fills gaps. The OBD port is gateway-gated so only
+# request/response reaches modules; door status may still be MS-CAN-only.
+_FORD_DIDS = ["402A", "402B", "4028", "4029", "2000", "2001", "1E12",
+              "DD00", "DD01", "DD04", "DD05", "8412", "F40C"]
+
+
+def _deep_probe(port, baud):
+    """Blocking serial probe (runs in an executor). Returns (summary, logtext)."""
+    lines = []
+    supported = []
+    raw = RawOBD(port, baud, "6")
+
+    def c(cmd, wait=0.0, rd=1.5):
+        return raw._cmd(cmd, wait, rd).replace("\r", " ").strip()
+
+    lines.append("# GOST OBD deep capture %s" % datetime.now().isoformat())
+    lines.append("# proto 6 (ISO 15765-4 CAN 11-bit/500k), headers on")
+    c("ATH1", 0.2)   # headers on so we see which ECU answers
+
+    # ---- supported PIDs (union of the 3 ECUs' bitmasks) ----
+    for base, sc in ((0, "0100"), (0x20, "0120"), (0x40, "0140"), (0x60, "0160")):
+        resp = c(sc, 0.0, 2.0)
+        lines.append("%s -> %s" % (sc, resp))
+        toks = RawOBD._hex_tokens(resp)
+        for i in range(len(toks) - 5):
+            if toks[i].upper() == "41" and int(toks[i + 1], 16) == base:
+                try:
+                    mask = int("".join(toks[i + 2:i + 6]), 16)
+                except Exception:
+                    continue
+                for b in range(32):
+                    if mask & (1 << (31 - b)):
+                        supported.append(base + b + 1)
+    supported = sorted(set(supported))
+    lines.append("# supported mode-01 PIDs: " +
+                 " ".join("%02X" % p for p in supported))
+    for pid in supported:
+        r = c("01%02X" % pid, 0.0, 1.2)
+        lines.append("  01%02X -> %s" % (pid, r))
+
+    # ---- mode-22 Ford DID sweep (curated + modest range) ----
+    lines.append("# mode-22 sweep")
+    hits = 0
+    for did in _FORD_DIDS + ["%04X" % n for n in range(0x2000, 0x2020)]:
+        r = c("22" + did, 0.0, 1.0)
+        up = r.upper()
+        if r and "NO DATA" not in up and "ERROR" not in up and "?" not in r and "7F 22" not in up:
+            lines.append("  22%s -> %s" % (did, r))
+            hits += 1
+
+    # ---- DTCs, all types ----
+    for cmd, kind in (("03", "stored"), ("07", "pending"), ("0A", "permanent")):
+        lines.append("MODE %s (%s) -> %s" % (cmd, kind, c(cmd, 0.0, 2.0)))
+
+    # ---- short passive sample (confirms the port is gateway-gated) ----
+    raw.ser.reset_input_buffer()
+    raw.ser.write(b"ATMA\r")
+    import time as _t
+    buf = b""
+    end = _t.time() + 5
+    while _t.time() < end:
+        n = raw.ser.in_waiting
+        if n:
+            buf += raw.ser.read(n)
+        else:
+            _t.sleep(0.01)
+    raw._cmd("", 0.1, 0.5)   # any char stops ATMA
+    frames = [l for l in buf.decode(errors="replace").replace("\r", "\n").split("\n") if l.strip() and l.strip() != ">"]
+    lines.append("# passive ATMA 5s: %d frames (0 = gateway-gated, expected)" % len(frames))
+    lines.extend("  " + f for f in frames[:40])
+    raw.close()
+
+    summary = ("CAPTURE DONE\nsupported PIDs: %d\nmode-22 hits: %d\npassive frames: %d"
+               % (len(supported), hits, len(frames)))
+    return summary, "\n".join(lines) + "\n"
+
+
 def _try_raw(port, protocol, baud):
     """Return a linked RawOBD (RPM OR speed answering) or None. Retries a few
     times because the bus can need a beat to settle right after the protocol
@@ -980,6 +1073,34 @@ class Telemetry:
                 lines.append("No protocol read the truck. Ensure key is in RUN")
                 lines.append("(engine running). Send this text to Claude.")
             return "\n".join(lines)
+        finally:
+            self.diag_pause = False
+
+    async def run_capture(self):
+        """Deep OBD capture, triggered from the DRIVE tab (bailey's idea: bake
+        it into the OS so no SSH/stop-wedge). Pauses the poll loop, takes the
+        port, and gathers everything the (gateway-gated) port WILL give via
+        request/response -- supported PIDs + values, a mode-22 Ford DID sweep
+        (door/oil-life/TPMS candidates), all DTC types, and a short passive
+        ATMA sample -- then writes a log to the FAT boot partition so it can be
+        pulled from a PC or over SSH. Returns a short on-screen summary."""
+        loop = asyncio.get_event_loop()
+        self.diag_pause = True
+        await asyncio.sleep(0.6)
+        self._close_obd()
+        try:
+            port = self.obd_port or "/dev/ttyUSB0"
+            summary, logtext = await loop.run_in_executor(None, _deep_probe, port, 115200)
+            path = _obd_capture_dir() + "/capture-%d.log" % int(time.time())
+            try:
+                with open(path, "w") as f:
+                    f.write(logtext)
+            except Exception as e:
+                path = "(write failed: %s)" % e
+            return summary + "\n\nSAVED: " + path + \
+                "\nPull it from the boot drive's gost-obd folder, or tell Claude to SSH."
+        except Exception as e:
+            return "capture failed: %s" % e
         finally:
             self.diag_pause = False
 
@@ -2102,6 +2223,9 @@ async def route_message(state: GostState, ws, msg):
     elif t == "obd.diag":
         result = await state.telemetry.run_diag()
         await ws.send(json.dumps({"type": "obd.diag", "result": result}))
+    elif t == "obd.capture":
+        result = await state.telemetry.run_capture()
+        await ws.send(json.dumps({"type": "obd.capture", "result": result}))
     elif t == "obd.readcodes":
         # Manual, immediate DTC scan (bailey: don't wait 30s for the poll).
         tel = state.telemetry

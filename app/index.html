@@ -317,6 +317,10 @@ a { color: var(--pri); }
             <button data-focus id="drive-diag-btn">[ RUN OBD DIAGNOSTIC ]</button>
             <span id="drive-diag-status" class="dim"></span>
           </div>
+          <div style="margin-top:6px;">
+            <button data-focus id="drive-capture-btn">[ CAPTURE OBD DATA -> FILE ]</button>
+            <span class="dim" style="font-size:11px;"> saves everything the truck exposes to the boot drive for analysis (~40s)</span>
+          </div>
         </div>
       </section>
 
@@ -827,6 +831,16 @@ const Net = {
     }
     else if (msg.type === "obd.readcodes") {
       if (window.setDiagStatus) window.setDiagStatus(msg.ok ? (msg.count + " CODE(S) STORED") : ("NO LINK: " + (msg.detail || "")));
+    }
+    else if (msg.type === "obd.capture") {
+      if (window.setDiagStatus) window.setDiagStatus("CAPTURE DONE");
+      Modal.open("OBD CAPTURE", (body) => {
+        const pre = el("div", { style: "white-space:pre-wrap; font-size:12px; line-height:1.5;" }, [msg.result || "(no result)"]);
+        body.appendChild(pre);
+        const close = el("button", { "data-focus": "" }, ["[ CLOSE ]"]);
+        close.addEventListener("click", () => Modal.close());
+        body.appendChild(el("div", { style: "margin-top:10px;" }, [close]));
+      });
     }
     else if (msg.type === "obd.diag") {
       if (window.setDiagStatus) window.setDiagStatus("DONE");
@@ -3056,6 +3070,11 @@ function buildSettings() {
     if (!Net.connected) { setDiagStatus("REQUIRES DEVICE"); return; }
     setDiagStatus("READING CODES...");
     Net.send({ type: "obd.readcodes" });
+  });
+  $("#drive-capture-btn").addEventListener("click", () => {
+    if (!Net.connected) { setDiagStatus("REQUIRES DEVICE"); return; }
+    setDiagStatus("CAPTURING (~40s, engine ON)...");
+    Net.send({ type: "obd.capture" });
   });
   $("#term-in").addEventListener("keydown", (e) => {
     if (e.key === "Enter") { e.preventDefault(); Term.submit(); }
