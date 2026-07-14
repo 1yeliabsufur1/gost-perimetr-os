@@ -848,21 +848,31 @@ const Net = {
     }
     else if (msg.type === "bt.scan") {
       const devs = msg.devices || [];
-      $("#bt-status").textContent = devs.length + " FOUND -- select to pair";
+      const connected = devs.filter((d) => d.connected);
+      // Connected device shown ABOVE the list, like Wi-Fi (bailey): so it's
+      // obvious what's linked and you don't blindly re-pair and hit an error.
+      $("#bt-status").textContent = connected.length
+        ? ("● CONNECTED: " + connected.map((d) => d.name).join(", "))
+        : (devs.length + " FOUND -- select to pair");
       const list = $("#bt-list");
       list.innerHTML = "";
       devs.forEach((d) => {
-        const b = el("button", { "data-focus": "", style: "display:block; width:100%; text-align:left; margin:2px 0;" },
-          [d.name + "  [" + d.mac + "]"]);
+        const tag = d.connected ? "  ● CONNECTED" : (d.paired ? "  ○ paired" : "");
+        const b = el("button", { "data-focus": "", class: d.connected ? "selected" : "",
+          style: "display:block; width:100%; text-align:left; margin:2px 0;" },
+          [d.name + "  [" + d.mac + "]" + tag]);
         b.addEventListener("click", () => {
-          $("#bt-status").textContent = "PAIRING " + d.name + "...";
-          Net.send({ type: "bt.pair", mac: d.mac });
+          if (d.connected) { $("#bt-status").textContent = "ALREADY CONNECTED: " + d.name; return; }
+          $("#bt-status").textContent = (d.paired ? "CONNECTING " : "PAIRING ") + d.name + " (12-45s)...";
+          Net.send({ type: "bt.pair", mac: d.mac, name: d.name });
         });
         list.appendChild(b);
       });
     }
     else if (msg.type === "bt.pair") {
-      $("#bt-status").textContent = msg.ok ? "PAIRED + TRUSTED" : "FAILED: " + (msg.detail || "");
+      $("#bt-status").textContent = msg.ok
+        ? (msg.obd ? "✓ " + (msg.detail || "OBD ADAPTER PAIRED") : "✓ PAIRED + TRUSTED")
+        : "FAILED: " + (msg.detail || "");
     }
     else if (msg.type === "update.check") { $("#update-result").textContent = msg.ok ? "UP TO DATE" : "CHECK FAILED"; }
     else if (msg.type === "clock.set") { $("#clock-set-result").textContent = msg.ok ? "CLOCK SET" : "FAILED -- CHECK DEVICE LOGS"; }

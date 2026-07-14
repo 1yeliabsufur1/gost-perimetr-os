@@ -1363,6 +1363,22 @@ class Telemetry:
                         continue
 
                 # --- real adapter is linked: poll the truck ---
+                # INSTANT unplug detection FIRST, before any serial I/O. On USB
+                # removal (or a BT rfcomm drop) the /dev node vanishes; checking
+                # for it is a non-blocking filesystem stat. This replaces the
+                # old alive()-read that ran serial I/O on the event-loop thread
+                # -- when the adapter was yanked that read hung the whole async
+                # loop, killed the WebSocket keepalive, and left every tab
+                # showing "REQUIRES DEVICE" until a reboot (bailey 2026-07-14).
+                if self.obd_port and not os.path.exists(self.obd_port):
+                    log("OBD: port", self.obd_port, "vanished -- adapter unplugged")
+                    self.obd_linked = False
+                    self.live = False
+                    self._close_obd()
+                    self.values = {}
+                    self.obd_status = "link lost -- searching..."
+                    await asyncio.sleep(0.2)
+                    continue
                 self.live = True
                 # The showcase's FAKE trouble code must never sit in the real
                 # ledger (bailey saw demo P1A42 listed like a stored code).
@@ -1393,11 +1409,15 @@ class Telemetry:
                     if dead_cycles > 25:  # ~5s of total silence
                         # Only give up if the adapter actually disconnected -- a
                         # quiet-but-linked ECU must NOT flap back to SHOWCASE.
+                        # alive() does serial I/O, so run it in an executor --
+                        # never on the event-loop thread (see unplug note above).
                         try:
+                            loop = asyncio.get_event_loop()
                             if self.use_raw:
-                                still = bool(self.raw and self.raw.alive())
+                                still = await loop.run_in_executor(
+                                    None, lambda: bool(self.raw and self.raw.alive()))
                             else:
-                                still = self.conn.is_connected()
+                                still = await loop.run_in_executor(None, self.conn.is_connected)
                         except Exception:
                             still = False
                         if not still:
@@ -1563,8 +1583,9 @@ def parse_nmea(line):
 
 
 class GPSReader:
-    def __init__(self, broadcast_cb):
+    def __init__(self, broadcast_cb, state=None):
         self.broadcast_cb = broadcast_cb
+        self.state = state
 
     async def run(self):
         try:
@@ -1573,22 +1594,29 @@ class GPSReader:
             log("pyserial unavailable, GPS disabled")
             return
         import glob
-        # USB GPS pucks only (ttyACM/ttyUSB). Do NOT touch /dev/serial0 -- on
-        # the Pi 5 that's the Bluetooth modem's UART (hci_uart on serial0-0);
-        # opening it as "GPS" fought the BT stack that OBD-over-Bluetooth needs
-        # AND spammed "readiness but no data" every second (found on hw
-        # 2026-07-14). A GPS HAT on serial0 can be opted in via config gps_port.
-        cfg_port = None
-        try:
-            cfg_port = self.state.config.get("gps_port") if hasattr(self, "state") else None
-        except Exception:
-            cfg_port = None
-        ports = ([cfg_port] if cfg_port else []) + \
-            sorted(glob.glob("/dev/ttyACM*") + glob.glob("/dev/ttyUSB*"))
+        # GPS puck ports. Do NOT touch /dev/serial0 (Pi 5 Bluetooth UART) and
+        # NEVER the port the OBD reader is on -- a USB ELM327 also enumerates as
+        # ttyUSB*, and the GPS probe opening it fought the OBD link and could
+        # wedge the adapter (bailey 2026-07-14). Default to ttyACM* (most USB
+        # GPS pucks) + an explicit gps_port; a ttyUSB GPS must be set via
+        # gps_port so it never collides with the OBD adapter by accident.
+        def cfg_port():
+            try:
+                return self.state.config.get("gps_port") if self.state else None
+            except Exception:
+                return None
+        def candidates():
+            obd_port = ""
+            try:
+                obd_port = self.state.telemetry.obd_port if self.state else ""
+            except Exception:
+                obd_port = ""
+            cp = cfg_port()
+            cand = ([cp] if cp else []) + sorted(glob.glob("/dev/ttyACM*"))
+            return [p for p in cand if p and p != obd_port]
         loop = asyncio.get_event_loop()
         while True:
-            ports = ([cfg_port] if cfg_port else []) + \
-                sorted(glob.glob("/dev/ttyACM*") + glob.glob("/dev/ttyUSB*"))
+            ports = candidates()
             if not ports:
                 await asyncio.sleep(10)   # nothing plugged in -- check back, quietly
                 continue
@@ -1818,8 +1846,12 @@ async def _btctl(*args, timeout=20):
     return proc.returncode == 0, (out or b"").decode(errors="ignore")
 
 
+_OBD_BT_NAMES = ("obd", "obdlink", "elm", "vgate", "veepeak", "obdii", "obd2")
+
+
 async def bt_scan():
-    """Power on, discover for 8s, return every device bluetoothctl knows."""
+    """Power on, discover for 8s, return every device with paired/connected
+    state so the UI can show what's already linked (like Wi-Fi)."""
     try:
         for cmd in (["rfkill", "unblock", "bluetooth"],):
             try:
@@ -1836,25 +1868,58 @@ async def bt_scan():
             p = line.strip().split(" ", 2)
             if len(p) >= 3 and p[0] == "Device":
                 devs.append({"mac": p[1], "name": p[2]})
+        # annotate paired/connected (cap the info calls so scan stays snappy)
+        for d in devs[:20]:
+            _ok, info = await _btctl("info", d["mac"], timeout=8)
+            d["paired"] = "Paired: yes" in info
+            d["connected"] = "Connected: yes" in info
+        # connected devices first
+        devs.sort(key=lambda d: (not d.get("connected"), not d.get("paired")))
         return devs
     except Exception as e:
         log("bt scan failed:", e)
         return []
 
 
-async def bt_pair(mac):
+async def _write_obd_bt_conf(mac):
+    """Persist a paired OBD adapter so obd-rfcomm.service auto-reconnects on
+    every boot (bailey: BT OBD didn't reconnect after a power cycle -- the
+    Settings pairing never wrote the config the link service reads)."""
+    script = ("mkdir -p /etc/gost && printf 'OBD_BT_MAC=%s\\n"
+              "OBD_BT_CHANNEL=auto\\nOBD_RFCOMM_NODE=/dev/rfcomm0\\n' %s "
+              "> /etc/gost/obd-bt.conf" % (mac, mac))
+    try:
+        p = await asyncio.create_subprocess_exec("sudo", "-n", "sh", "-c", script,
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+        await asyncio.wait_for(p.wait(), timeout=10)
+        p2 = await asyncio.create_subprocess_exec("sudo", "-n", "systemctl", "restart", "obd-rfcomm",
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+        await asyncio.wait_for(p2.wait(), timeout=10)
+        return True
+    except Exception as e:
+        log("obd-bt.conf write failed:", e)
+        return False
+
+
+async def bt_pair(mac, name=""):
     if not mac:
         return {"ok": False, "detail": "no device"}
     try:
         detail = ""
         for step in ("pair", "trust", "connect"):
-            ok, out = await _btctl(step, mac, timeout=30)
+            ok, out = await _btctl(step, mac, timeout=40)
             detail = out.strip()[-160:]
             # "connect" often fails for OBD dongles (no audio/input profile);
             # a successful pair+trust is what matters for rfcomm later.
             if not ok and step == "pair" and "already" not in out.lower():
                 return {"ok": False, "detail": detail}
-        return {"ok": True, "detail": detail}
+        # If this is an OBD adapter, wire it up for auto-reconnect at boot.
+        is_obd = any(k in (name or "").lower() for k in _OBD_BT_NAMES)
+        if is_obd:
+            wrote = await _write_obd_bt_conf(mac)
+            detail = ("OBD adapter saved -- will auto-connect on boot" if wrote
+                      else "paired, but auto-reconnect config write failed")
+        return {"ok": True, "detail": detail, "obd": is_obd}
     except Exception as e:
         return {"ok": False, "detail": str(e)}
 
@@ -1923,7 +1988,7 @@ class GostState:
         self.tvplayer = TVPlayer(self)
         self.inputs = InputManager(self.broadcast, self.config)
         self.pots = PotManager(self.broadcast)
-        self.gps = GPSReader(self.broadcast)
+        self.gps = GPSReader(self.broadcast, self)
         self.dashcam = Dashcam()
 
     def broadcast(self, msg):
@@ -2063,7 +2128,7 @@ async def route_message(state: GostState, ws, msg):
     elif t == "bt.scan":
         await ws.send(json.dumps({"type": "bt.scan", "devices": await bt_scan()}))
     elif t == "bt.pair":
-        res = await bt_pair(msg.get("mac"))
+        res = await bt_pair(msg.get("mac"), msg.get("name", ""))
         await ws.send(json.dumps({"type": "bt.pair", **res}))
     elif t == "dashcam.set":
         await state.dashcam.set_enabled(bool(msg.get("on")))
