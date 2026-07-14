@@ -12,6 +12,10 @@ RemainAfterExit=yes
 ExecStart=-/usr/sbin/rfkill unblock wifi
 ExecStart=-/usr/bin/nmcli radio wifi on
 ExecStart=-/usr/bin/nmcli networking on
+# Disable Wi-Fi power-save: the Pi's radio sleeps when idle and drops the
+# connection mid-session (bailey saw repeated drops 2026-07-14). -w is
+# best-effort; the NetworkManager conf.d drop-in makes it stick per-connection.
+ExecStart=-/usr/sbin/iw dev wlan0 set power_save off
 
 [Install]
 WantedBy=multi-user.target

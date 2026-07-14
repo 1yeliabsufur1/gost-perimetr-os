@@ -212,6 +212,14 @@ systemctl enable obd-rfcomm.service 2>/dev/null || true
 # Force the Wi-Fi radio on at every boot (bailey: it boots soft-disabled).
 install -m0644 "$GOST_HOME/system/gost-net.service" /etc/systemd/system/gost-net.service
 systemctl enable gost-net.service 2>/dev/null || true
+# Kill Wi-Fi power-save permanently -- the radio sleeping when idle drops the
+# connection mid-session (bailey 2026-07-14). This makes it stick across
+# reconnects/reboots at the NetworkManager level.
+mkdir -p /etc/NetworkManager/conf.d
+cat > /etc/NetworkManager/conf.d/gost-wifi-powersave.conf <<'NMPS'
+[connection]
+wifi.powersave = 2
+NMPS
 systemctl enable hud-backend.service
 systemctl enable hud-kiosk.service
 # Pi OS Lite already defaults to multi-user.target, but pin it so nothing
