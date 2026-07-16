@@ -1104,6 +1104,67 @@ class Telemetry:
         finally:
             self.diag_pause = False
 
+    async def run_watch(self, seconds=45):
+        """LIVE DOOR TEST (bailey's idea): stream changing signals to the
+        VEHICLE screen so opening a door gives instant visual confirmation.
+        Watches only the mode-22 Ford DIDs that actually answer (request/
+        response gets through the gateway; passive doesn't), polling them fast
+        and broadcasting any value change as it happens."""
+        loop = asyncio.get_event_loop()
+        self.diag_pause = True
+        await asyncio.sleep(0.6)
+        self._close_obd()
+        raw = None
+        try:
+            port = self.obd_port or "/dev/ttyUSB0"
+            raw = await loop.run_in_executor(None, lambda: RawOBD(port, 115200, "6"))
+            await loop.run_in_executor(None, lambda: raw._cmd("ATH1", 0.2))
+
+            def rd(cmd):
+                return raw._cmd(cmd, 0.0, 0.8).replace("\r", " ").strip()
+
+            # Build the watch set: only DIDs that actually answer stay in.
+            watch = []
+            for did in _FORD_DIDS:
+                r = await loop.run_in_executor(None, rd, "22" + did)
+                up = r.upper()
+                if r and "NO DATA" not in up and "7F 22" not in up and "?" not in r and "ERROR" not in up:
+                    watch.append("22" + did)
+            if not watch:
+                self.state.broadcast({"type": "probe", "done": True, "changes": 0,
+                    "status": "No reachable body signals -- door status is gated / MS-CAN on this truck. Nothing to watch."})
+                return "No mode-22 body DIDs answered -- door data isn't reachable through this OBD port."
+            self.state.broadcast({"type": "probe",
+                "status": "WATCHING %d signal(s) -- open/close a door now" % len(watch), "n": len(watch)})
+            base = {}
+            for cmd in watch:
+                base[cmd] = await loop.run_in_executor(None, rd, cmd)
+            end = time.time() + seconds
+            changes = 0
+            while time.time() < end:
+                for cmd in watch:
+                    cur = await loop.run_in_executor(None, rd, cmd)
+                    if cur != base.get(cmd):
+                        changes += 1
+                        self.state.broadcast({"type": "probe",
+                            "changed": {"label": cmd, "old": base.get(cmd, ""), "new": cur}})
+                        base[cmd] = cur
+                self.state.broadcast({"type": "probe",
+                    "status": "%ds left -- %d change(s) seen" % (int(end - time.time()), changes)})
+                await asyncio.sleep(0.05)
+            self.state.broadcast({"type": "probe", "done": True, "changes": changes})
+            return "Door test done: %d change(s) across %d signal(s)." % (changes, len(watch))
+        except Exception as e:
+            self.state.broadcast({"type": "probe", "done": True, "status": "error: %s" % e})
+            return "watch failed: %s" % e
+        finally:
+            if raw is not None:
+                try:
+                    await loop.run_in_executor(None, raw.close)
+                except Exception:
+                    pass
+            self.diag_pause = False
+
     async def connect_obd(self):
         """Try hard to link a real OBDLink/ELM327 adapter across every likely
         port and baud rate, with retries. Returns True and sets obd_linked on
@@ -2226,6 +2287,9 @@ async def route_message(state: GostState, ws, msg):
     elif t == "obd.capture":
         result = await state.telemetry.run_capture()
         await ws.send(json.dumps({"type": "obd.capture", "result": result}))
+    elif t == "obd.watch":
+        result = await state.telemetry.run_watch()
+        await ws.send(json.dumps({"type": "obd.watch", "result": result}))
     elif t == "obd.readcodes":
         # Manual, immediate DTC scan (bailey: don't wait 30s for the poll).
         tel = state.telemetry

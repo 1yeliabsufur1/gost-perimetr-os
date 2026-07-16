@@ -344,7 +344,10 @@ a { color: var(--pri); }
           <div id="veh-rotate-row" style="min-height:24px;">
             <button data-focus id="veh-rot-left">◄ ROTATE</button>
             <button data-focus id="veh-rot-right">ROTATE ►</button>
+            <button data-focus id="veh-doortest-btn">[ LIVE DOOR TEST ]</button>
           </div>
+          <div id="veh-doortest-status" class="dim" style="font-size:12px; min-height:16px;"></div>
+          <div id="veh-doortest-log" style="font-size:12px; text-align:left; max-height:90px; overflow-y:auto;"></div>
           <div id="veh-open-list" class="glow" style="font-size:15px; min-height:20px;"></div>
         </div>
       </section>
@@ -842,6 +845,8 @@ const Net = {
         body.appendChild(el("div", { style: "margin-top:10px;" }, [close]));
       });
     }
+    else if (msg.type === "probe") { DoorTest.onMessage(msg); }
+    else if (msg.type === "obd.watch") { DoorTest.onDone(msg); }
     else if (msg.type === "obd.diag") {
       if (window.setDiagStatus) window.setDiagStatus("DONE");
       Modal.open("OBD DIAGNOSTIC", (body) => {
@@ -1839,6 +1844,38 @@ const VehArt = {
       if (ajar) { line(q[0], q[2]); line(q[1], q[3]); }  // X-brace = solid read
     }
     ctx.globalAlpha = 1;
+  },
+};
+
+/* LIVE DOOR TEST (bailey): stream changing OBD signals to the VEHICLE screen
+ * so opening a door gives instant visual confirmation. */
+const DoorTest = {
+  active: false,
+  start() {
+    if (!Net.connected) { $("#veh-doortest-status").textContent = "REQUIRES DEVICE"; return; }
+    this.active = true;
+    $("#veh-doortest-log").innerHTML = "";
+    $("#veh-doortest-status").textContent = "STARTING (engine ON)...";
+    Net.send({ type: "obd.watch" });
+  },
+  onMessage(msg) {
+    const st = $("#veh-doortest-status"), logEl = $("#veh-doortest-log");
+    if (!st) return;
+    if (msg.status) st.textContent = msg.status;
+    if (msg.changed) {
+      const row = el("div", { class: "glow" },
+        ["⚡ " + msg.changed.label + ":  " + (msg.changed.old || "?") + "  →  " + (msg.changed.new || "?")]);
+      logEl.insertBefore(row, logEl.firstChild);
+      // flash the whole diagram so a change is unmissable
+      const cv = $("#veh3d");
+      if (cv) { cv.style.filter = "brightness(2.2)"; setTimeout(() => { cv.style.filter = ""; }, 220); }
+    }
+    if (msg.done) { this.active = false; }
+  },
+  onDone(msg) {
+    this.active = false;
+    const st = $("#veh-doortest-status");
+    if (st) st.textContent = msg.result || "DONE";
   },
 };
 
@@ -3043,6 +3080,7 @@ function buildSettings() {
   };
   $("#veh-rot-left").addEventListener("click", () => nudge(-0.4));
   $("#veh-rot-right").addEventListener("click", () => nudge(0.4));
+  $("#veh-doortest-btn").addEventListener("click", () => DoorTest.start());
   updateVehButtons();
   const setUnit = (key, val) => { Config.set(key, val); updateUnitButtons(); };
   $("#unit-f-btn").addEventListener("click", () => setUnit("units_temp", "F"));

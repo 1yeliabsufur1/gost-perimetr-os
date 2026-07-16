@@ -22,6 +22,12 @@ Restart=always
 # it retries forever but never hammers. The backend also logs a full
 # traceback on any fatal exception before exiting, so the journal shows why.
 RestartSec=5
+# Bound shutdown: a blocking serial read in an executor thread can keep the
+# process from exiting on SIGTERM, hanging `systemctl stop/restart` for the
+# default 90s (seen 2026-07-14). Force-kill the whole cgroup after 5s. State
+# is written on change, not exit, so a hard kill loses nothing.
+TimeoutStopSec=5
+KillMode=mixed
 StandardOutput=journal
 StandardError=journal
 
