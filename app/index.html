@@ -172,6 +172,25 @@ a { color: var(--pri); }
 #tv-channels-wrap { display:flex; flex-direction:column; min-height: 0; overflow:hidden; }
 #tv-channels { width: 220px; flex: 1; overflow-y:auto; min-height: 0; }
 .tv-chan-row { display:block; width:100%; text-align:left; margin: 2px 0; }
+.tv-chan-row .now { display:block; font-size:10px; color:var(--dim); letter-spacing:0.5px; margin-top:1px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.tv-chan-row .now.live { color:var(--pri); }
+/* TV top-right GUIDE button */
+#tv-guide-btn { position:absolute; top:10px; right:10px; z-index:8; font-size:11px; }
+/* NOW/NEXT strip along the bottom of the tuned channel */
+#tv-nownext { position:absolute; bottom:8px; right:8px; font-size:11px; background:rgba(0,0,0,0.65);
+  padding:3px 9px; text-align:right; max-width:60%; line-height:1.5; }
+#tv-nownext .nn-now { color:var(--pri); }
+/* Cross-channel "what's on now" guide grid (DirecTV-style) */
+#tv-guide-grid { position:absolute; inset:0; z-index:10; background:rgba(0,0,0,0.94);
+  overflow:auto; padding:8px; }
+.tvg-row { display:grid; grid-template-columns:130px repeat(5, 1fr); gap:3px; margin-bottom:3px; }
+.tvg-head .tvg-slot, .tvg-head .tvg-ch { color:var(--dim); border:none; background:none; font-size:11px; letter-spacing:1px; }
+.tvg-ch { padding:5px 6px; font-size:12px; color:var(--pri); border:1px solid var(--line);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.tvg-slot { padding:5px 6px; font-size:11px; text-align:left; border:1px solid var(--line);
+  background:rgba(255,176,0,0.05); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.tvg-slot.tvg-now { background:var(--pri); color:var(--bg); font-weight:bold; }
+.tvg-slot.tvg-empty { color:var(--dim); background:none; }
 #tv-screen { flex:1; position:relative; background:#000; border:1px solid var(--line); display:flex; align-items:center; justify-content:center; overflow:hidden; }
 #tv-video { width:100%; height:100%; object-fit:contain; background:#000; }
 #tv-static-canvas { width:100%; height:100%; }
@@ -380,7 +399,12 @@ a { color: var(--pri); }
 <br>&gt; A USB stick with a TV/ folder auto-imports on plug-in.
 <br>&gt; Empty channels play static -- like real dead air.</div>
             <div id="tv-overlay-text"></div>
+            <!-- NOW/NEXT strip for the tuned channel -->
+            <div id="tv-nownext" class="hidden"></div>
+            <!-- top-right GUIDE toggle -> cross-channel "what's on now" grid -->
+            <button data-focus id="tv-guide-btn">[ GUIDE ]</button>
             <div id="tv-osd" class="glow"><div class="osd-num"></div><div class="osd-name"></div></div>
+            <div id="tv-guide-grid" class="hidden"></div>
           </div>
         </div>
       </section>
@@ -1987,6 +2011,7 @@ const TV = {
   tune(chan) {
     this.chan = chan; this.watching = true;
     showChannelOSD(chan); // always resets its own 5s timer, never accumulates
+    setTimeout(updateTvNowNext, 50);
     if (Net.connected) { Net.send({ type: "tv.tune", chan }); renderTvStatus(); return; }
     if (chan === "83") {
       $("#tv-idle").classList.add("hidden");
@@ -2140,6 +2165,90 @@ function showChannelOSD(chan) {
   _osdTimer = setTimeout(() => $("#tv-osd").classList.remove("show"), 5000);
 }
 setInterval(() => { if (TV.watching) TV.supervisorTick(); }, 1000);
+// Keep the NOW/NEXT strip and the channel-list "on now" fresh while on TV.
+setInterval(() => {
+  if (State.tab !== "tv") return;
+  updateTvNowNext();
+  if (!TV.watching) renderTvChannelList();   // browsing: refresh what's-on labels
+}, 20000);
+
+/* ---- "what's on now" helpers (reuse the broadcast resolver) ---- */
+function _cleanTitle(name) { return String(name || "").replace(/\.[^.]+$/, ""); }
+function programAt(chan, atMs) {
+  const res = resolveChannel(chan, TV.channels(), TV.commercials, Config.data.guide3 || {}, atMs);
+  if (res.kind === "show") return { label: _cleanTitle(res.file.name), live: true };
+  if (res.kind === "commercial") return { label: "▪ commercial", live: false };
+  if (res.reason === "off_air") return null;   // truly empty channel
+  return { label: "OFF AIR", live: false };
+}
+function activeChannels() {
+  const guide3 = Config.data.guide3 || {}, chans = TV.channels();
+  return TV.allChans().filter(c => {
+    const days = guide3[c] || {};
+    const scheduled = WEEKDAYS.some(d => (days[d] || []).length > 0);
+    return scheduled || (chans[c] && chans[c].files && chans[c].files.length);
+  });
+}
+
+/* Cross-channel DirecTV-style grid: rows = active channels, columns = the next
+ * 5 half-hours, cells = what's scheduled then. Click a cell to tune. */
+const TvGuide = {
+  open() { $("#tv-guide-grid").classList.remove("hidden"); this.render();
+    if (!this._t) this._t = setInterval(() => { if (!$("#tv-guide-grid").classList.contains("hidden")) this.render(); }, 30000); },
+  close() { $("#tv-guide-grid").classList.add("hidden"); },
+  toggle() { $("#tv-guide-grid").classList.contains("hidden") ? this.open() : this.close(); },
+  render() {
+    const grid = $("#tv-guide-grid"); grid.innerHTML = "";
+    const now = Date.now(), d = new Date(now);
+    const nowMin = d.getHours() * 60 + d.getMinutes();
+    const startMin = Math.floor(nowMin / 30) * 30, cols = 5;
+    const head = el("div", { class: "tvg-row tvg-head" }, [el("div", { class: "tvg-ch" }, ["CHANNEL"])]);
+    for (let i = 0; i < cols; i++) {
+      const m = (startMin + i * 30) % (24 * 60);
+      head.appendChild(el("div", { class: "tvg-slot" }, [i === 0 ? "NOW" : pad2(Math.floor(m / 60)) + ":" + pad2(m % 60)]));
+    }
+    grid.appendChild(head);
+    const chans = activeChannels();
+    if (!chans.length) {
+      grid.appendChild(el("div", { class: "dim", style: "padding:14px;" },
+        ["Nothing programmed yet. Add video files to a channel or schedule shows in the GUIDE tab, and they'll show up here."]));
+    }
+    for (const c of chans) {
+      const info = TV.channels()[c];
+      const row = el("div", { class: "tvg-row" }, [el("div", { class: "tvg-ch", title: info.name }, [c.padStart(2, "0") + " " + (info.name || "")])]);
+      for (let i = 0; i < cols; i++) {
+        const atMs = now + ((startMin + i * 30 + 2) - nowMin) * 60000;   // ~2 min into the slot
+        const prog = programAt(c, atMs);
+        const cell = el("button", { class: "tvg-slot" + (i === 0 ? " tvg-now" : "") + (prog ? "" : " tvg-empty") },
+          [prog ? prog.label : "— off air —"]);
+        cell.addEventListener("click", () => { this.close(); TV.tune(c); });
+        row.appendChild(cell);
+      }
+      grid.appendChild(row);
+    }
+  },
+};
+
+/* NOW/NEXT strip for the tuned channel. */
+function updateTvNowNext() {
+  const el2 = $("#tv-nownext");
+  if (!el2) return;
+  if (!TV.watching || !TV.chan || TV.chan === "83") { el2.classList.add("hidden"); return; }
+  const nowP = programAt(TV.chan, Date.now());
+  // find the next distinct program by probing forward in 5-min steps (cheap)
+  let nextLabel = null, nextAt = null;
+  const nowLabel = nowP ? nowP.label : null;
+  for (let m = 5; m <= 180; m += 5) {
+    const p = programAt(TV.chan, Date.now() + m * 60000);
+    const lbl = p ? p.label : "off air";
+    if (lbl !== (nowLabel || "off air")) { nextLabel = lbl; nextAt = new Date(Date.now() + m * 60000); break; }
+  }
+  el2.classList.remove("hidden");
+  el2.innerHTML = "";
+  el2.appendChild(el("div", { class: "nn-now" }, ["NOW: " + (nowLabel || "OFF AIR")]));
+  if (nextLabel) el2.appendChild(el("div", { class: "dim" },
+    ["NEXT: " + nextLabel + " @ " + pad2(nextAt.getHours()) + ":" + pad2(nextAt.getMinutes())]));
+}
 
 function renderTvChannelList() {
   const box = $("#tv-channels");
@@ -2147,11 +2256,15 @@ function renderTvChannelList() {
   const chans = TV.allChans();
   for (const c of chans) {
     const info = TV.channels()[c];
-    const meta = info.files && info.files.length ? "ON-AIR" : "OFF AIR";
+    const prog = programAt(c, Date.now());
+    const nowLine = prog
+      ? el("span", { class: "now" + (prog.live ? " live" : "") }, [(prog.live ? "● " : "") + prog.label])
+      : el("span", { class: "now" }, ["off air"]);
     box.appendChild(el("button", { class: "tv-chan-row", "data-focus": "", onclick: () => TV.tune(c) },
-      [`${c.padStart(2, "0")} ${info.name || ""}`, el("span", { class: "dim", style: "float:right;" }, [meta])]));
+      [`${c.padStart(2, "0")} ${info.name || ""}`, nowLine]));
   }
-  box.appendChild(el("button", { class: "tv-chan-row", "data-focus": "", onclick: () => TV.tune("83") }, ["83 YOUTUBE"]));
+  box.appendChild(el("button", { class: "tv-chan-row", "data-focus": "", onclick: () => TV.tune("83") },
+    ["83 YOUTUBE", el("span", { class: "now" }, ["live web video"])]));
 }
 function renderTvStatus() {
   if (!Net.tvStatus) return;
@@ -2175,6 +2288,11 @@ function renderTvStatus() {
 }
 TabHandlers.tv = {
   onAction(action) {
+    // GUIDE grid open: pad Back closes it; other keys pass through to focus nav.
+    if (!$("#tv-guide-grid").classList.contains("hidden")) {
+      if (action === "back" || action === "back_hold" || action === "left") { TvGuide.close(); return true; }
+      return false;
+    }
     if (!TV.watching) return false;
     if (action === "up") { TV.step(1); return true; }
     if (action === "down") { TV.step(-1); return true; }
@@ -3109,6 +3227,7 @@ function buildSettings() {
   $("#unit-kml-btn").addEventListener("click", () => setUnit("units_econ", "KML"));
   updateUnitButtons();
   $("#wifi-scan-btn").addEventListener("click", () => Wifi.open());
+  $("#tv-guide-btn").addEventListener("click", () => TvGuide.toggle());
   // The diagnostic runs from Settings AND from the DRIVE tab (bailey: DRIVE
   // is the diagnostics screen). Same backend call; both status spans update.
   const setDiagStatus = (txt) => {
