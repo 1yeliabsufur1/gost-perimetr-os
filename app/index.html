@@ -390,18 +390,14 @@ a { color: var(--pri); }
 
       <section id="tab-tv" class="tab">
         <div id="tv-layout">
-          <div class="frame" data-title="CHANNELS" id="tv-channels-wrap" style="width:220px;">
-            <div id="tv-channels"></div>
-          </div>
           <div id="tv-screen">
             <video id="tv-video" class="hidden" playsinline></video>
             <canvas id="tv-static-canvas" class="hidden" width="480" height="270"></canvas>
-            <div id="tv-idle" style="font-size:13px;color:var(--dim); text-align:left; max-width:480px; line-height:2;">SELECT A CHANNEL (UP/DOWN + ENTER)
+            <div id="tv-idle" style="font-size:13px;color:var(--dim); text-align:left; max-width:520px; line-height:2;">TAP <b>[ GUIDE ]</b> (top-right) TO BROWSE + PROGRAM CHANNELS  ·  UP/DOWN CHANGES CHANNEL
 <br><br>HOW THE STATION WORKS:
 <br>&gt; Put video files in /opt/gost/media/TV/CH07/ (etc.) -- that channel goes ON-AIR with a 24/7 rotation.
-<br>&gt; Or open GUIDE and program shows to weekday time blocks, DirecTV style.
+<br>&gt; In GUIDE, tap a channel name to program shows into weekday time blocks.
 <br>&gt; A USB stick with a TV/ folder auto-imports on plug-in.
-<br>&gt; Empty channels play static -- like real dead air.
 <br>&gt; SEASONAL: drop files in CH07/Halloween/ (or Christmas, July4th...) and that
 <br>&nbsp;&nbsp; channel auto-plays them when the date hits. Same for COMMERCIALS/Halloween/.</div>
             <div id="tv-overlay-text"></div>
@@ -531,6 +527,13 @@ a { color: var(--pri); }
             <span id="bt-status" class="dim"></span>
           </div>
           <div id="bt-list"></div>
+        </div>
+        <div class="frame" data-title="YOUTUBE (CH 83)">
+          <div class="settings-row">
+            <input type="text" id="yt-url-input" style="flex:1;" placeholder="paste a YouTube video or playlist URL">
+            <button data-focus id="yt-save-btn">[ SAVE ]</button>
+          </div>
+          <div id="yt-status" class="dim" style="font-size:11px;"></div>
         </div>
         <div class="frame" data-title="THEME">
           <div class="settings-row" id="theme-swatches"></div>
@@ -2041,16 +2044,10 @@ const TV = {
     this.chan = chan; this.watching = true;
     showChannelOSD(chan); // always resets its own 5s timer, never accumulates
     setTimeout(updateTvNowNext, 50);
+    // YouTube is a frontend overlay regardless of backend -- handle before the
+    // device tv.tune so it always uses the configured (working) embed.
+    if (chan === "83") { openYouTube(); return; }
     if (Net.connected) { Net.send({ type: "tv.tune", chan }); renderTvStatus(); return; }
-    if (chan === "83") {
-      $("#tv-idle").classList.add("hidden");
-      $("#tv-video").classList.add("hidden"); $("#tv-video").pause();
-      $("#tv-static-canvas").classList.add("hidden");
-      stopStaticAnim();
-      $("#tv-overlay-text").textContent = "CH83 -- YOUTUBE (HOLD <- 5s TO RETURN)";
-      Overlay.open("https://www.youtube.com/embed?listType=user_uploads");
-      return;
-    }
     this._playLocal();
     if (this.reresolveTimer) clearInterval(this.reresolveTimer);
     this.reresolveTimer = setInterval(() => this._playLocal(true), 30000);
@@ -2228,7 +2225,7 @@ const TvGuide = {
   close() { $("#tv-guide-grid").classList.add("hidden"); },
   toggle() { $("#tv-guide-grid").classList.contains("hidden") ? this.open() : this.close(); },
   editChannel(chan) {   // enter the programmer for one channel (merged GUIDE)
-    this.mode = "edit"; Guide.selectedChan = chan; Guide.pendingFile = null;
+    this.mode = "edit"; Guide.selectedChan = chan; Guide.pendingFile = null; Guide.pool = "normal";
     if (!WEEKDAYS.includes(Guide.selectedDay)) Guide.selectedDay = WEEKDAYS[new Date().getDay()];
     this.render();
   },
@@ -2314,8 +2311,43 @@ function updateTvNowNext() {
     ["NEXT: " + nextLabel + " @ " + pad2(nextAt.getHours()) + ":" + pad2(nextAt.getMinutes())]));
 }
 
+/* Convert a YouTube watch/playlist/short URL to an embeddable URL (the old
+ * hardcoded '?listType=user_uploads' is invalid and always errored, bailey). */
+function ytToEmbed(url) {
+  if (!url) return null;
+  let m;
+  if ((m = url.match(/[?&]v=([\w-]+)/))) return "https://www.youtube-nocookie.com/embed/" + m[1];
+  if ((m = url.match(/youtu\.be\/([\w-]+)/))) return "https://www.youtube-nocookie.com/embed/" + m[1];
+  if ((m = url.match(/\/shorts\/([\w-]+)/))) return "https://www.youtube-nocookie.com/embed/" + m[1];
+  if ((m = url.match(/[?&]list=([\w-]+)/))) return "https://www.youtube-nocookie.com/embed/videoseries?list=" + m[1];
+  if (url.indexOf("/embed/") >= 0) return url;
+  return null;
+}
+function openYouTube() {
+  $("#tv-idle").classList.add("hidden");
+  $("#tv-video").classList.add("hidden"); $("#tv-video").pause();
+  $("#tv-static-canvas").classList.add("hidden"); stopStaticAnim();
+  $("#tv-overlay-text").textContent = "CH83 -- YOUTUBE (HOLD <- 5s TO RETURN)";
+  const embed = Config.data.yt_embed;
+  if (embed) { Overlay.open(embed); return; }
+  Modal.open("SET YOUTUBE CHANNEL", (body) => {
+    body.appendChild(el("div", { class: "dim", style: "margin-bottom:6px;" },
+      ["Paste a YouTube video or playlist URL for channel 83 (also settable in SETTINGS):"]));
+    const inp = el("input", { type: "text", "data-focus": "", placeholder: "youtube.com/watch?v=...  or  /playlist?list=..." });
+    body.appendChild(inp);
+    const save = el("button", { "data-focus": "", style: "margin-top:8px;" }, ["[ SET & PLAY ]"]);
+    save.addEventListener("click", () => {
+      const e = ytToEmbed(inp.value.trim());
+      if (!e) { inp.value = ""; inp.placeholder = "not a valid YouTube URL -- try again"; return; }
+      Config.set("yt_embed", e); Modal.close(); Overlay.open(e);
+    });
+    body.appendChild(el("div", { style: "margin-top:8px;" }, [save]));
+  });
+}
+
 function renderTvChannelList() {
   const box = $("#tv-channels");
+  if (!box) return;   // sidebar removed; guide grid is the channel browser now
   box.innerHTML = "";
   const chans = TV.allChans();
   for (const c of chans) {
@@ -2396,7 +2428,7 @@ TabHandlers.nav = {
 /* ============================================================================
  * GUIDE TAB (station manager)
  * ========================================================================== */
-const Guide = { selectedChan: null, selectedDay: "sun", pendingFile: null };
+const Guide = { selectedChan: null, selectedDay: "sun", pendingFile: null, pool: "normal" };
 
 function probeVideoDuration(file) {
   return new Promise((resolve) => {
@@ -2432,13 +2464,20 @@ function selectGuideChan(chan) {
 
 /* Files a channel can schedule: real scanned files on device (with durations
  * from the backend), or demo/uploaded objects in preview. */
-function channelFileObjs(chan) {
+function channelFileObjs(chan, pool) {
   const info = TV.channels()[chan] || {};
   const durs = info.durations || {};
-  const demo = (TV.demoFiles[chan] || {}).files || [];
-  const out = (info.files || []).map(f => (typeof f === "string")
-    ? { name: f, duration: durs[f] || 1800, url: "" } : f);
-  // include any demo/uploaded objects not already listed by the scan
+  // pool: null/"normal" = the channel's regular files; a season name = that
+  // channel's seasonal subfolder (CH07/Halloween/), which auto-plays in season.
+  let src, demo;
+  if (pool && pool !== "normal") {
+    src = (info.seasons && info.seasons[pool]) || [];
+    demo = ((TV.demoFiles[chan] || {}).seasons || {})[pool] || [];
+  } else {
+    src = info.files || [];
+    demo = (TV.demoFiles[chan] || {}).files || [];
+  }
+  const out = src.map(f => (typeof f === "string") ? { name: f, duration: durs[f] || 1800, url: "" } : f);
   for (const f of demo) if (!out.some(o => o.name === f.name)) out.push(f);
   return out;
 }
@@ -2467,14 +2506,17 @@ function renderGuideMain() {
   const addBtn = el("button", { "data-focus": "" }, ["[ + ADD FILES ]"]);
   const fileInput = el("input", { type: "file", accept: "video/*", multiple: "", class: "hidden" });
   addBtn.addEventListener("click", () => fileInput.click());
+  const pool = isCommercials ? "normal" : (Guide.pool || "normal");
+  const seasonal = pool !== "normal";
   fileInput.addEventListener("change", async () => {
     for (const f of fileInput.files) {
       const dur = await probeVideoDuration(f);
       const entry = { name: f.name, duration: dur, url: URL.createObjectURL(f) };
       if (isCommercials) TV.commercials.push(entry);
       else {
-        const ch = TV.demoFiles[Guide.selectedChan] || (TV.demoFiles[Guide.selectedChan] = { name: "CH" + Guide.selectedChan, files: [] });
-        ch.files.push(entry);
+        const ch = TV.demoFiles[Guide.selectedChan] || (TV.demoFiles[Guide.selectedChan] = { name: "CH" + Guide.selectedChan, files: [], seasons: {} });
+        if (seasonal) { ch.seasons = ch.seasons || {}; (ch.seasons[pool] = ch.seasons[pool] || []).push(entry); }
+        else ch.files.push(entry);
       }
     }
     renderGuideMain(); renderTvChannelList();
@@ -2485,31 +2527,47 @@ function renderGuideMain() {
     const renameBtn = el("button", { "data-focus": "" }, ["[ RENAME CHANNEL ]"]);
     renameBtn.addEventListener("click", () => renameChannel(Guide.selectedChan, curName));
     headerRow.push(renameBtn);
-    headerRow.push(el("span", { class: "dim", style: "margin-left:8px;" }, [`CH ${Guide.selectedChan.padStart(2, "0")} -- "${curName}"`]));
   }
   main.appendChild(el("div", {}, headerRow));
 
-  const files = isCommercials ? TV.commercials : channelFileObjs(Guide.selectedChan);
+  // Pool selector: NORMAL schedule vs a holiday folder that auto-plays by date.
+  if (!isCommercials) {
+    const pools = ["normal", "halloween", "thanksgiving", "christmas", "newyears", "valentines", "stpatricks", "easter", "july4th", "summer"];
+    const sel = el("div", { class: "day-tabs", style: "margin-top:8px; flex-wrap:wrap;" });
+    pools.forEach(p => {
+      const b = el("button", { class: p === pool ? "active" : "" }, [p === "normal" ? "SCHEDULED" : p.toUpperCase()]);
+      b.addEventListener("click", () => { Guide.pendingFile = null; Guide.pool = p; renderGuideMain(); });
+      sel.appendChild(b);
+    });
+    main.appendChild(sel);
+    if (seasonal) main.appendChild(el("div", { class: "dim", style: "margin:6px 0; font-size:11px;" },
+      ["Files here auto-play on this channel during " + (SEASON_LABELS[pool] || pool) + " -- no scheduling needed."]));
+  }
+
+  const files = isCommercials ? TV.commercials : channelFileObjs(Guide.selectedChan, pool);
   const fileList = el("div", { style: "margin-top:8px;" });
   files.forEach((f, idx) => {
     const row = el("div", { class: "file-row" }, [
       el("span", {}, [f.name + `  (${f.duration}s)`]),
     ]);
-    if (!isCommercials) {
+    if (!isCommercials && !seasonal) {
       row.appendChild(el("button", { "data-focus": "", onclick: () => { Guide.pendingFile = f; renderGuideMain(); } }, ["[ PLACE ]"]));
     }
     // Remove from the actual source (commercials pool or demo uploads); scanned
     // device files live in folders and aren't deletable here.
     row.appendChild(el("button", { "data-focus": "", onclick: () => {
       if (isCommercials) TV.commercials = TV.commercials.filter(x => x.name !== f.name);
-      else { const dm = TV.demoFiles[Guide.selectedChan]; if (dm) dm.files = (dm.files || []).filter(x => x.name !== f.name); }
+      else { const dm = TV.demoFiles[Guide.selectedChan];
+        if (dm) { if (seasonal && dm.seasons && dm.seasons[pool]) dm.seasons[pool] = dm.seasons[pool].filter(x => x.name !== f.name);
+                  else dm.files = (dm.files || []).filter(x => x.name !== f.name); } }
       renderGuideMain();
     } }, ["[ X ]"]));
     fileList.appendChild(row);
   });
   main.appendChild(fileList);
 
-  if (isCommercials) return; // commercials have no day schedule
+  // Seasonal pools auto-play (no schedule); commercials have no day schedule.
+  if (isCommercials || seasonal) return;
 
   const dayTabs = el("div", { class: "day-tabs", style: "margin-top:12px;" });
   WEEKDAYS.forEach(d => {
@@ -3313,6 +3371,12 @@ function buildSettings() {
   updateUnitButtons();
   $("#wifi-scan-btn").addEventListener("click", () => Wifi.open());
   $("#tv-guide-btn").addEventListener("click", () => TvGuide.toggle());
+  const ytInit = $("#yt-url-input"); if (ytInit && Config.data.yt_embed) $("#yt-status").textContent = "current: " + Config.data.yt_embed;
+  $("#yt-save-btn").addEventListener("click", () => {
+    const e = ytToEmbed($("#yt-url-input").value.trim());
+    if (!e) { $("#yt-status").textContent = "not a valid YouTube URL"; return; }
+    Config.set("yt_embed", e); $("#yt-status").textContent = "saved: " + e; $("#yt-url-input").value = "";
+  });
   // The diagnostic runs from Settings AND from the DRIVE tab (bailey: DRIVE
   // is the diagnostics screen). Same backend call; both status spans update.
   const setDiagStatus = (txt) => {
