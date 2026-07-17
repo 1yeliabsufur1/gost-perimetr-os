@@ -208,8 +208,12 @@ a { color: var(--pri); }
 #guide-main { flex:1; overflow-y:auto; min-height: 0; }
 .day-tabs button { margin-right:2px; }
 .day-tabs button.active { background: var(--dim); }
-#guide-grid { display:grid; grid-template-columns: repeat(12, 1fr); gap:2px; margin-top:10px; }
-.slot { border:1px solid var(--line); font-size:10px; padding:4px 2px; text-align:center; cursor:pointer; white-space:pre-line; overflow:hidden; }
+/* Full-day schedule timeline: one horizontally-scrolling row of half-hour
+   slots (bailey wanted a horizontal scroll bar). Blocks span via grid columns. */
+#guide-grid { display:grid; grid-auto-flow:column; grid-auto-columns:96px;
+  grid-template-rows:auto; gap:2px; margin-top:10px; overflow-x:auto; padding-bottom:6px; }
+.slot { border:1px solid var(--line); font-size:10px; padding:6px 3px; text-align:center;
+  cursor:pointer; white-space:pre-line; overflow:hidden; min-height:44px; }
 .slot.occupied { background: var(--dim); }
 .slot.blocked { opacity:0.25; cursor:not-allowed; }
 .file-row { display:flex; justify-content:space-between; padding:3px 0; border-bottom:1px dashed var(--line); font-size:13px; }
@@ -411,16 +415,6 @@ a { color: var(--pri); }
         </div>
       </section>
 
-      <section id="tab-guide" class="tab">
-        <div id="guide-layout">
-          <div class="frame" data-title="CHANNELS" id="guide-channels-wrap" style="width:200px;">
-            <div id="guide-channels"></div>
-          </div>
-          <div class="frame" data-title="PROGRAMMER" id="guide-main-wrap" style="flex:1;">
-            <div id="guide-main"></div>
-          </div>
-        </div>
-      </section>
 
       <section id="tab-music" class="tab">
         <div class="frame" data-title="MUSIC / PODCASTS" id="music-frame">
@@ -616,7 +610,7 @@ a { color: var(--pri); }
  * over ws://127.0.0.1:8765 + http://127.0.0.1:8766.
  * =========================================================================== */
 
-const TABS = ["home","drive","hud","vehicle","carplay","tv","guide","music","nav","term","settings"];
+const TABS = ["home","drive","hud","vehicle","carplay","tv","music","nav","term","settings"];
 const TAB_LABELS = {
   home:"HOME", drive:"DRIVE", hud:"HUD", vehicle:"VEHICLE", carplay:"CARPLAY", tv:"TV",
   guide:"GUIDE", music:"MUSIC", nav:"NAV", term:"TERM", settings:"SETTINGS",
@@ -893,7 +887,7 @@ const Net = {
     }
     else if (msg.type === "library") {
       this.library = msg;
-      renderTvChannelList(); renderGuideChannelList();
+      renderTvChannelList(); if (TvGuide.mode === "edit") renderGuideMain();
       renderMusicGenres(); renderMusicTracks();
     }
     else if (msg.type === "config") { Object.assign(Config.data, msg); delete Config.data.type; onConfigSynced(); }
@@ -2228,17 +2222,24 @@ function activeChannels() {
 /* Cross-channel DirecTV-style grid: rows = active channels, columns = the next
  * 5 half-hours, cells = what's scheduled then. Click a cell to tune. */
 const TvGuide = {
-  open() { $("#tv-guide-grid").classList.remove("hidden"); this.render();
-    if (!this._t) this._t = setInterval(() => { if (!$("#tv-guide-grid").classList.contains("hidden")) this.render(); }, 30000); },
+  mode: "grid",   // "grid" (view + tune) | "edit" (program one channel)
+  open() { this.mode = "grid"; $("#tv-guide-grid").classList.remove("hidden"); this.render();
+    if (!this._t) this._t = setInterval(() => { if (this.mode === "grid" && !$("#tv-guide-grid").classList.contains("hidden")) this.render(); }, 30000); },
   close() { $("#tv-guide-grid").classList.add("hidden"); },
   toggle() { $("#tv-guide-grid").classList.contains("hidden") ? this.open() : this.close(); },
-  render() {
+  editChannel(chan) {   // enter the programmer for one channel (merged GUIDE)
+    this.mode = "edit"; Guide.selectedChan = chan; Guide.pendingFile = null;
+    if (!WEEKDAYS.includes(Guide.selectedDay)) Guide.selectedDay = WEEKDAYS[new Date().getDay()];
+    this.render();
+  },
+  render() { this.mode === "edit" ? this.renderEdit() : this.renderGrid(); },
+
+  renderGrid() {
     const grid = $("#tv-guide-grid"); grid.innerHTML = "";
     const seas = activeSeasonsFE().filter(s => SEASON_LABELS[s]);
-    if (seas.length) {
-      grid.appendChild(el("div", { class: "glow", style: "padding:4px 6px; margin-bottom:6px; font-size:13px;" },
-        [seas.map(s => SEASON_LABELS[s]).join("  ") + " — seasonal folders are on the air"]));
-    }
+    grid.appendChild(el("div", { style: "margin-bottom:6px; font-size:11px;", class: "dim" },
+      ["TAP A SHOW TO WATCH  ·  TAP A CHANNEL NAME TO PROGRAM IT" +
+       (seas.length ? "   —   " + seas.map(s => SEASON_LABELS[s]).join(" ") + " ON AIR" : "")]));
     const now = Date.now(), d = new Date(now);
     const nowMin = d.getHours() * 60 + d.getMinutes();
     const startMin = Math.floor(nowMin / 30) * 30, cols = 5;
@@ -2248,16 +2249,15 @@ const TvGuide = {
       head.appendChild(el("div", { class: "tvg-slot" }, [i === 0 ? "NOW" : pad2(Math.floor(m / 60)) + ":" + pad2(m % 60)]));
     }
     grid.appendChild(head);
-    // Show EVERY channel like a real TV guide (bailey) -- 03..82 + 83 YouTube,
-    // empty ones just read "off air". Active channels float to the top so
-    // what's actually on is easy to find without scrolling the whole dial.
     const active = new Set(activeChannels());
     const chans = TV.allChans().slice().sort((a, b) =>
       (active.has(b) - active.has(a)) || (Number(a) - Number(b))).concat("83");
     for (const c of chans) {
       const yt = c === "83";
       const info = yt ? { name: "YOUTUBE" } : TV.channels()[c];
-      const row = el("div", { class: "tvg-row" }, [el("div", { class: "tvg-ch", title: info.name }, [c.padStart(2, "0") + " " + (info.name || "")])]);
+      const nameCell = el("button", { class: "tvg-ch", title: "program " + (info.name || c) }, [c.padStart(2, "0") + " " + (info.name || "")]);
+      if (!yt) nameCell.addEventListener("click", () => this.editChannel(c));
+      const row = el("div", { class: "tvg-row" }, [nameCell]);
       for (let i = 0; i < cols; i++) {
         const prog = yt ? { label: "live web video" } : programAt(c, now + ((startMin + i * 30 + 2) - nowMin) * 60000);
         const cell = el("button", { class: "tvg-slot" + (i === 0 ? " tvg-now" : "") + (prog ? "" : " tvg-empty") },
@@ -2267,6 +2267,29 @@ const TvGuide = {
       }
       grid.appendChild(row);
     }
+  },
+
+  renderEdit() {
+    const grid = $("#tv-guide-grid"); grid.innerHTML = "";
+    const chan = Guide.selectedChan;
+    const name = chan === "00" ? "COMMERCIALS" : ((TV.channels()[chan] || {}).name || "CH");
+    // toolbar: back, title, day tabs
+    const bar = el("div", { style: "display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px;" }, []);
+    const back = el("button", { "data-focus": "" }, ["◄ ALL CHANNELS"]);
+    back.addEventListener("click", () => { this.mode = "grid"; this.render(); });
+    bar.appendChild(back);
+    bar.appendChild(el("span", { class: "glow", style: "font-size:14px;" },
+      ["PROGRAM CH " + String(chan).padStart(2, "0") + "  " + name]));
+    if (chan !== "00") {
+      const commBtn = el("button", { "data-focus": "", style: "margin-left:auto;" }, ["COMMERCIALS ▸"]);
+      commBtn.addEventListener("click", () => this.editChannel("00"));
+      bar.appendChild(commBtn);
+    }
+    grid.appendChild(bar);
+    // the existing editor (file tray + place/remove) renders into this div;
+    // its schedule grid is horizontally scrollable across the full day.
+    grid.appendChild(el("div", { id: "tvg-editor-main" }));
+    renderGuideMain();
   },
 };
 
@@ -2387,6 +2410,7 @@ function probeVideoDuration(file) {
 
 function renderGuideChannelList() {
   const box = $("#guide-channels");
+  if (!box) return;   // GUIDE tab merged into the TV guide grid; list is gone
   box.innerHTML = "";
   box.appendChild(el("button", { class: "tv-chan-row", "data-focus": "", onclick: () => selectGuideChan("00") }, ["00 COMMERCIALS"]));
   const chans = TV.allChans();
@@ -2406,8 +2430,22 @@ function selectGuideChan(chan) {
   renderGuideMain();
 }
 
+/* Files a channel can schedule: real scanned files on device (with durations
+ * from the backend), or demo/uploaded objects in preview. */
+function channelFileObjs(chan) {
+  const info = TV.channels()[chan] || {};
+  const durs = info.durations || {};
+  const demo = (TV.demoFiles[chan] || {}).files || [];
+  const out = (info.files || []).map(f => (typeof f === "string")
+    ? { name: f, duration: durs[f] || 1800, url: "" } : f);
+  // include any demo/uploaded objects not already listed by the scan
+  for (const f of demo) if (!out.some(o => o.name === f.name)) out.push(f);
+  return out;
+}
+
 function renderGuideMain() {
-  const main = $("#guide-main");
+  const main = $("#tvg-editor-main");
+  if (!main) return;
   main.innerHTML = "";
   if (!Guide.selectedChan) {
     // First-run guidance -- a blank panel taught nobody anything (bailey:
@@ -2451,7 +2489,7 @@ function renderGuideMain() {
   }
   main.appendChild(el("div", {}, headerRow));
 
-  const files = isCommercials ? TV.commercials : ((TV.demoFiles[Guide.selectedChan] || {}).files || []);
+  const files = isCommercials ? TV.commercials : channelFileObjs(Guide.selectedChan);
   const fileList = el("div", { style: "margin-top:8px;" });
   files.forEach((f, idx) => {
     const row = el("div", { class: "file-row" }, [
@@ -2460,7 +2498,13 @@ function renderGuideMain() {
     if (!isCommercials) {
       row.appendChild(el("button", { "data-focus": "", onclick: () => { Guide.pendingFile = f; renderGuideMain(); } }, ["[ PLACE ]"]));
     }
-    row.appendChild(el("button", { "data-focus": "", onclick: () => { files.splice(idx, 1); renderGuideMain(); } }, ["[ X ]"]));
+    // Remove from the actual source (commercials pool or demo uploads); scanned
+    // device files live in folders and aren't deletable here.
+    row.appendChild(el("button", { "data-focus": "", onclick: () => {
+      if (isCommercials) TV.commercials = TV.commercials.filter(x => x.name !== f.name);
+      else { const dm = TV.demoFiles[Guide.selectedChan]; if (dm) dm.files = (dm.files || []).filter(x => x.name !== f.name); }
+      renderGuideMain();
+    } }, ["[ X ]"]));
     fileList.appendChild(row);
   });
   main.appendChild(fileList);

@@ -2323,6 +2323,8 @@ class GostState:
         names = self.config.get("channel_names", {}) or {}
         return {num: {"name": names.get(num, c["name"]),
                       "files": [f.name for f in c["files"]],
+                      "durations": {f.name: self.dur_cache.get(f)
+                                    for f in c["files"] if self.dur_cache.get(f)},
                       "seasons": {s: [f.name for f in fl]
                                   for s, fl in (c.get("seasons") or {}).items()}}
                 for num, c in self.channels.items()}
