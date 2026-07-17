@@ -2030,11 +2030,13 @@ const TV = {
   channels() {
     const dial = fixedChannelDial();
     const real = Net.connected ? (Net.library.channels || {}) : this.demoFiles;
-    for (const num of Object.keys(real)) dial[num] = real[num];
-    // User-assigned channel names override the folder-derived default.
+    // Normalize keys to String(int) so "07" and "7" never become two channels
+    // (bailey saw a duplicate ch 7 in the guide).
+    for (const num of Object.keys(real)) { const k = String(parseInt(num, 10)); if (dial[k]) dial[k] = real[num]; }
     const names = Config.data.channel_names || {};
     for (const num of Object.keys(names)) {
-      if (dial[num]) dial[num] = Object.assign({}, dial[num], { name: names[num] });
+      const k = String(parseInt(num, 10));
+      if (dial[k]) dial[k] = Object.assign({}, dial[k], { name: names[num] });
     }
     return dial;
   },
