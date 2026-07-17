@@ -865,11 +865,20 @@ def _obd_capture_dir():
     return d
 
 
-# Curated Ford mode-22 DIDs to try (door/oil-life/TPMS candidates), plus a
-# modest range fills gaps. The OBD port is gateway-gated so only
-# request/response reaches modules; door status may still be MS-CAN-only.
+# Ford diagnostic module request headers (11-bit CAN). Doors/body live on the
+# BCM, NOT the PCM -- earlier probes only hit the PCM (default addressing), so
+# they never asked the right module (bailey: door test showed nothing). We set
+# ATSH <header> before each module's DID sweep. The gateway may still block
+# non-emissions modules, but this is the legitimate way to reach the BCM.
+_FORD_MODULES = {
+    "PCM": "7E0",   # powertrain (emissions -- always reachable)
+    "BCM": "726",   # body control -- DOOR AJAR, lighting, locks
+    "IPC": "720",   # instrument cluster (also mirrors some body state)
+    "ABS": "760",   # ABS/TPMS on some Fords
+}
+# Curated mode-22 DID candidates; the per-module range sweep fills the gaps.
 _FORD_DIDS = ["402A", "402B", "4028", "4029", "2000", "2001", "1E12",
-              "DD00", "DD01", "DD04", "DD05", "8412", "F40C"]
+              "DD00", "DD01", "DD04", "DD05", "8412", "F40C", "D111", "D112"]
 
 
 def _deep_probe(port, baud):
@@ -906,15 +915,28 @@ def _deep_probe(port, baud):
         r = c("01%02X" % pid, 0.0, 1.2)
         lines.append("  01%02X -> %s" % (pid, r))
 
-    # ---- mode-22 Ford DID sweep (curated + modest range) ----
-    lines.append("# mode-22 sweep")
+    # ---- mode-22 Ford DID sweep, PER MODULE (addresses the BCM where doors
+    # live, not just the PCM) ----
     hits = 0
-    for did in _FORD_DIDS + ["%04X" % n for n in range(0x2000, 0x2020)]:
-        r = c("22" + did, 0.0, 1.0)
-        up = r.upper()
-        if r and "NO DATA" not in up and "ERROR" not in up and "?" not in r and "7F 22" not in up:
-            lines.append("  22%s -> %s" % (did, r))
-            hits += 1
+    dids = _FORD_DIDS + ["%04X" % n for n in range(0x2000, 0x2030)] + \
+        ["%04X" % n for n in range(0x4020, 0x4040)]
+    for mod, hdr in _FORD_MODULES.items():
+        sh = c("ATSH" + hdr, 0.2)   # set request header to this module
+        # does the module answer AT ALL? (a supported/unsupported reply both
+        # prove it's reachable through the gateway)
+        probe = c("221E12", 0.0, 1.0)
+        reachable = bool(probe) and "NO DATA" not in probe.upper() and "?" not in probe
+        lines.append("# --- module %s (hdr %s) %s ---" % (mod, hdr,
+                     "REACHABLE" if reachable else "no answer (gated?)"))
+        if not reachable:
+            continue
+        for did in dids:
+            r = c("22" + did, 0.0, 0.8)
+            up = r.upper()
+            if r and "NO DATA" not in up and "ERROR" not in up and "?" not in r and "7F 22" not in up:
+                lines.append("  [%s] 22%s -> %s" % (mod, did, r))
+                hits += 1
+    c("ATSH7E0", 0.2)   # restore default header
 
     # ---- DTCs, all types ----
     for cmd, kind in (("03", "stored"), ("07", "pending"), ("0A", "permanent")):
@@ -1127,32 +1149,42 @@ class Telemetry:
             def rd(cmd):
                 return raw._cmd(cmd, 0.0, 0.8).replace("\r", " ").strip()
 
-            # Build the watch set: only DIDs that actually answer stay in.
-            watch = []
-            for did in _FORD_DIDS:
-                r = await loop.run_in_executor(None, rd, "22" + did)
-                up = r.upper()
-                if r and "NO DATA" not in up and "7F 22" not in up and "?" not in r and "ERROR" not in up:
-                    watch.append("22" + did)
+            # Build the watch set across Ford MODULES -- crucially the BCM
+            # (doors), not just the PCM. Each entry is (label, header, didcmd);
+            # only DIDs that actually answer stay in.
+            dids = _FORD_DIDS + ["%04X" % n for n in range(0x4020, 0x4030)]
+            watch = []   # (label, hdr, "22XXXX")
+            for mod, hdr in _FORD_MODULES.items():
+                await loop.run_in_executor(None, rd, "ATSH" + hdr)
+                for did in dids:
+                    r = await loop.run_in_executor(None, rd, "22" + did)
+                    up = r.upper()
+                    if r and "NO DATA" not in up and "7F 22" not in up and "?" not in r and "ERROR" not in up:
+                        watch.append(("%s:%s" % (mod, did), hdr, "22" + did))
             if not watch:
                 self.state.broadcast({"type": "probe", "done": True, "changes": 0,
-                    "status": "No reachable body signals -- door status is gated / MS-CAN on this truck. Nothing to watch."})
-                return "No mode-22 body DIDs answered -- door data isn't reachable through this OBD port."
+                    "status": "No module answered a body DID (PCM/BCM/IPC/ABS) -- door data is gated on this truck's OBD port. Confirmed not reachable."})
+                return "No Ford module answered a body DID -- door status isn't reachable through this OBD port (gateway)."
             self.state.broadcast({"type": "probe",
-                "status": "WATCHING %d signal(s) -- open/close a door now" % len(watch), "n": len(watch)})
+                "status": "WATCHING %d signal(s) across modules -- open/close a door now" % len(watch), "n": len(watch)})
+
+            def rd_hdr(hdr, cmd):
+                raw._cmd("ATSH" + hdr, 0.0, 0.4)
+                return raw._cmd(cmd, 0.0, 0.8).replace("\r", " ").strip()
+
             base = {}
-            for cmd in watch:
-                base[cmd] = await loop.run_in_executor(None, rd, cmd)
+            for label, hdr, cmd in watch:
+                base[label] = await loop.run_in_executor(None, rd_hdr, hdr, cmd)
             end = time.time() + seconds
             changes = 0
             while time.time() < end:
-                for cmd in watch:
-                    cur = await loop.run_in_executor(None, rd, cmd)
-                    if cur != base.get(cmd):
+                for label, hdr, cmd in watch:
+                    cur = await loop.run_in_executor(None, rd_hdr, hdr, cmd)
+                    if cur != base.get(label):
                         changes += 1
                         self.state.broadcast({"type": "probe",
-                            "changed": {"label": cmd, "old": base.get(cmd, ""), "new": cur}})
-                        base[cmd] = cur
+                            "changed": {"label": label, "old": base.get(label, ""), "new": cur}})
+                        base[label] = cur
                 self.state.broadcast({"type": "probe",
                     "status": "%ds left -- %d change(s) seen" % (int(end - time.time()), changes)})
                 await asyncio.sleep(0.05)
