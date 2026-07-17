@@ -2249,9 +2249,9 @@ const TvGuide = {
       head.appendChild(el("div", { class: "tvg-slot" }, [i === 0 ? "NOW" : pad2(Math.floor(m / 60)) + ":" + pad2(m % 60)]));
     }
     grid.appendChild(head);
-    const active = new Set(activeChannels());
-    const chans = TV.allChans().slice().sort((a, b) =>
-      (active.has(b) - active.has(a)) || (Number(a) - Number(b))).concat("83");
+    // Plain numeric order like a real tuner (bailey) -- 03,04,05... not
+    // active-floated-to-top.
+    const chans = TV.allChans().slice().sort((a, b) => Number(a) - Number(b)).concat("83");
     for (const c of chans) {
       const yt = c === "83";
       const info = yt ? { name: "YOUTUBE" } : TV.channels()[c];
