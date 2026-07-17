@@ -11,15 +11,17 @@ Conflicts=getty@tty1.service
 
 [Service]
 Type=oneshot
-ExecStartPre=/bin/sh -c 'echo "\n*** GOST/PERIMETR OS FIRST-BOOT INSTALL ***\n*** Takes ~10 minutes with internet connected -- reboots into the dashboard when done. ***\n*** Do NOT power off. Default login if you need a shell: gost / gost ***\n" > /dev/tty1 || true'
+# Clear tty1 and paint ONE clean full-screen banner (no scrolling log spam --
+# bailey: the install log on the console reads as "starting in the terminal").
+ExecStartPre=/bin/sh -c 'printf "\033c\n\n    GOST / PERIMETR OS\n    ==================\n\n    First-boot setup in progress -- this takes a few minutes\n    and reboots into the dashboard automatically.\n\n    Do NOT power off.\n" > /dev/tty1 || true'
 ExecStart=/opt/gost-src/install.sh
 # "infinity", not "0": trixie's systemd start-timed-out a ~4.5-minute
 # install with the 0 spelling (observed on real hardware 2026-07-04).
 TimeoutStartSec=infinity
-# journal+console so install progress is visible on the attached screen
-# instead of leaving the operator staring at a bare login prompt.
-StandardOutput=journal+console
-StandardError=journal+console
+# Log to the JOURNAL only (not the console) so the clean banner above stays
+# on screen instead of scrolling install text.
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target

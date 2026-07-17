@@ -2208,17 +2208,18 @@ const TvGuide = {
       head.appendChild(el("div", { class: "tvg-slot" }, [i === 0 ? "NOW" : pad2(Math.floor(m / 60)) + ":" + pad2(m % 60)]));
     }
     grid.appendChild(head);
-    const chans = activeChannels();
-    if (!chans.length) {
-      grid.appendChild(el("div", { class: "dim", style: "padding:14px;" },
-        ["Nothing programmed yet. Add video files to a channel or schedule shows in the GUIDE tab, and they'll show up here."]));
-    }
+    // Show EVERY channel like a real TV guide (bailey) -- 03..82 + 83 YouTube,
+    // empty ones just read "off air". Active channels float to the top so
+    // what's actually on is easy to find without scrolling the whole dial.
+    const active = new Set(activeChannels());
+    const chans = TV.allChans().slice().sort((a, b) =>
+      (active.has(b) - active.has(a)) || (Number(a) - Number(b))).concat("83");
     for (const c of chans) {
-      const info = TV.channels()[c];
+      const yt = c === "83";
+      const info = yt ? { name: "YOUTUBE" } : TV.channels()[c];
       const row = el("div", { class: "tvg-row" }, [el("div", { class: "tvg-ch", title: info.name }, [c.padStart(2, "0") + " " + (info.name || "")])]);
       for (let i = 0; i < cols; i++) {
-        const atMs = now + ((startMin + i * 30 + 2) - nowMin) * 60000;   // ~2 min into the slot
-        const prog = programAt(c, atMs);
+        const prog = yt ? { label: "live web video" } : programAt(c, now + ((startMin + i * 30 + 2) - nowMin) * 60000);
         const cell = el("button", { class: "tvg-slot" + (i === 0 ? " tvg-now" : "") + (prog ? "" : " tvg-empty") },
           [prog ? prog.label : "— off air —"]);
         cell.addEventListener("click", () => { this.close(); TV.tune(c); });
