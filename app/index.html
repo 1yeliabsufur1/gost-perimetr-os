@@ -1048,10 +1048,13 @@ const Weather = {
     }
   },
   async tick() {
-    const fix = (typeof Nav !== "undefined" && Nav.lastFix) ? Nav.lastFix : null;
+    // Fall back to a saved home location (Settings) so weather works without a
+    // GPS puck -- most installs won't have one, and a perpetual fault is noise.
+    let fix = (typeof Nav !== "undefined" && Nav.lastFix) ? Nav.lastFix : null;
+    if (!fix && Config.data.wx_home) fix = Config.data.wx_home;
     if (!fix) {
-      FaultBus.raise("wx", { label: "WX NO FIX" });
-      this.showLastOr("WX NO FIX");
+      // No GPS + no home set: stay quiet (dim widget only, NO flashing fault).
+      this.paint("◌", "WX --", false);
       return;
     }
     const unit = (Config.data.units_temp === "C") ? "celsius" : "fahrenheit";
@@ -1068,11 +1071,9 @@ const Weather = {
       const c = j.current;
       const deg = Math.round(c.temperature_2m) + "°" + (unit === "celsius" ? "C" : "F");
       this.last = { icon: this.icon(c.weather_code, c.is_day), temp: deg, ts: Date.now() };
-      FaultBus.clear("wx");
       this.paint(this.last.icon, this.last.temp, true);
     } catch (e) {
-      // Offline / timeout / fetch fail -> honest degraded state, cached marked stale.
-      FaultBus.raise("wx", { label: "WX OFFLINE" });
+      // Offline / timeout -> quiet dim widget (cached if we have it), no fault.
       this.showLastOr("WX OFFLINE");
     }
   },
