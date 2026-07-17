@@ -397,7 +397,9 @@ a { color: var(--pri); }
 <br>&gt; Put video files in /opt/gost/media/TV/CH07/ (etc.) -- that channel goes ON-AIR with a 24/7 rotation.
 <br>&gt; Or open GUIDE and program shows to weekday time blocks, DirecTV style.
 <br>&gt; A USB stick with a TV/ folder auto-imports on plug-in.
-<br>&gt; Empty channels play static -- like real dead air.</div>
+<br>&gt; Empty channels play static -- like real dead air.
+<br>&gt; SEASONAL: drop files in CH07/Halloween/ (or Christmas, July4th...) and that
+<br>&nbsp;&nbsp; channel auto-plays them when the date hits. Same for COMMERCIALS/Halloween/.</div>
             <div id="tv-overlay-text"></div>
             <!-- NOW/NEXT strip for the tuned channel -->
             <div id="tv-nownext" class="hidden"></div>
@@ -721,6 +723,31 @@ function pickCommercial(commercials, nowSec) {
   return commercials[Math.floor(nowSec / 30) % commercials.length];
 }
 
+/* Holiday/seasonal windows (mirror of the backend). A channel's seasonal
+ * subfolder auto-takes over its rotation while the date is in range. */
+const SEASON_WINDOWS = {
+  halloween: (m, d) => m === 10,
+  thanksgiving: (m, d) => m === 11 && d <= 30,
+  christmas: (m, d) => m === 12 && d <= 26,
+  newyears: (m, d) => (m === 12 && d >= 27) || (m === 1 && d <= 2),
+  valentines: (m, d) => m === 2 && d >= 7 && d <= 15,
+  stpatricks: (m, d) => m === 3 && d >= 10 && d <= 18,
+  easter: (m, d) => m === 4 && d <= 20,
+  july4th: (m, d) => (m === 6 && d >= 28) || (m === 7 && d <= 6),
+  memorial: (m, d) => m === 5 && d >= 22,
+  labor: (m, d) => m === 9 && d <= 8,
+  summer: (m, d) => m === 7 || m === 8,
+};
+const SEASON_LABELS = { halloween: "🎃 HALLOWEEN", thanksgiving: "🦃 THANKSGIVING",
+  christmas: "🎄 CHRISTMAS", newyears: "🎆 NEW YEAR", valentines: "❤ VALENTINES",
+  stpatricks: "☘ ST PATRICK'S", easter: "🐰 EASTER", july4th: "🎆 JULY 4TH",
+  memorial: "🎖 MEMORIAL DAY", labor: "🛠 LABOR DAY", summer: "☀ SUMMER" };
+function activeSeasonsFE(nowMs) {
+  if (Net.connected && Net.library && Net.library.active_seasons) return Net.library.active_seasons;
+  const dt = new Date(nowMs || Date.now()), m = dt.getMonth() + 1, d = dt.getDate();
+  return Object.keys(SEASON_WINDOWS).filter(k => SEASON_WINDOWS[k](m, d));
+}
+
 function resolveChannel(chan, channels, commercials, guide3, nowMs) {
   const now = nowMs != null ? nowMs : Date.now();
   const dt = new Date(now);
@@ -759,8 +786,13 @@ function resolveChannel(chan, channels, commercials, guide3, nowMs) {
     return { kind: "static", reason: "gap_no_commercials", until: gapSecs };
   }
 
-  if (ch && ch.files && ch.files.length) {
-    const files = ch.files;
+  if (ch && ((ch.files && ch.files.length) || ch.seasons)) {
+    let files = ch.files || [];
+    const seasons = ch.seasons || {};
+    for (const s of activeSeasonsFE(now)) {   // holiday folder takes over the rotation
+      if (seasons[s] && seasons[s].length) { files = seasons[s]; break; }
+    }
+    if (!files.length) return { kind: "static", reason: "off_air" };
     const durations = files.map(f => f.duration || 300);
     const total = durations.reduce((a, b) => a + b, 0);
     if (total <= 0) return { kind: "static", reason: "no_duration" };
@@ -2176,7 +2208,7 @@ setInterval(() => {
 function _cleanTitle(name) { return String(name || "").replace(/\.[^.]+$/, ""); }
 function programAt(chan, atMs) {
   const res = resolveChannel(chan, TV.channels(), TV.commercials, Config.data.guide3 || {}, atMs);
-  if (res.kind === "show") return { label: _cleanTitle(res.file.name), live: true };
+  if (res.kind === "show") return { label: _cleanTitle(typeof res.file === "string" ? res.file : res.file.name), live: true };
   if (res.kind === "commercial") return { label: "▪ commercial", live: false };
   if (res.reason === "off_air") return null;   // truly empty channel
   return { label: "OFF AIR", live: false };
@@ -2199,6 +2231,11 @@ const TvGuide = {
   toggle() { $("#tv-guide-grid").classList.contains("hidden") ? this.open() : this.close(); },
   render() {
     const grid = $("#tv-guide-grid"); grid.innerHTML = "";
+    const seas = activeSeasonsFE().filter(s => SEASON_LABELS[s]);
+    if (seas.length) {
+      grid.appendChild(el("div", { class: "glow", style: "padding:4px 6px; margin-bottom:6px; font-size:13px;" },
+        [seas.map(s => SEASON_LABELS[s]).join("  ") + " — seasonal folders are on the air"]));
+    }
     const now = Date.now(), d = new Date(now);
     const nowMin = d.getHours() * 60 + d.getMinutes();
     const startMin = Math.floor(nowMin / 30) * 30, cols = 5;

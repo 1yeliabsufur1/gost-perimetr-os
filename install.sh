@@ -136,6 +136,13 @@ fi
 for n in $(seq -w 3 82); do
   ls -d "$GOST_HOME/media/TV/$n "* >/dev/null 2>&1 || mkdir -p "$GOST_HOME/media/TV/$n CH"
 done
+# Example seasonal folders so the holiday auto-switching is discoverable: any
+# channel (and COMMERCIALS) can hold Holiday subfolders that take over on the
+# date. Ship the folders empty as a template; users drop videos in.
+for h in Halloween Thanksgiving Christmas NewYears Valentines July4th; do
+  mkdir -p "$GOST_HOME/media/TV/COMMERCIALS/$h"
+done
+mkdir -p "$GOST_HOME/media/TV/07 CH/Halloween" "$GOST_HOME/media/TV/12 CH/Christmas"
 mkdir -p "$GOST_HOME/media/MUSIC"/{ROCK,POP,RAP,COUNTRY,JAZZ,METAL,ELECTRONIC,CLASSICAL} \
          "$GOST_HOME/media/PODCASTS"/{NEWS,COMEDY,"TRUE CRIME",TECH,SPORTS,HISTORY}
 mkdir -p "$GOST_HOME/maps" "$GOST_HOME/state"

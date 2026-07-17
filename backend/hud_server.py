@@ -340,6 +340,47 @@ def link_usb_maps():
         log("usb map link failed:", e)
 
 
+# US holiday / seasonal windows. A channel subfolder whose name matches one of
+# these (via _SEASON_ALIASES) auto-takes over that channel while the date is in
+# range -- e.g. CH07/Halloween/ plays all October. Same for COMMERCIALS/<name>/.
+_SEASON_WINDOWS = {
+    "halloween":    lambda m, d: m == 10,
+    "thanksgiving": lambda m, d: m == 11 and d <= 30,
+    "christmas":    lambda m, d: m == 12 and d <= 26,
+    "newyears":     lambda m, d: (m == 12 and d >= 27) or (m == 1 and d <= 2),
+    "valentines":   lambda m, d: m == 2 and 7 <= d <= 15,
+    "stpatricks":   lambda m, d: m == 3 and 10 <= d <= 18,
+    "easter":       lambda m, d: m == 4 and d <= 20,
+    "july4th":      lambda m, d: (m == 6 and d >= 28) or (m == 7 and d <= 6),
+    "memorial":     lambda m, d: m == 5 and d >= 22,
+    "labor":        lambda m, d: m == 9 and d <= 8,
+    "summer":       lambda m, d: m in (7, 8),
+}
+_SEASON_ALIASES = {
+    "halloween": "halloween", "spooky": "halloween",
+    "christmas": "christmas", "xmas": "christmas", "holiday": "christmas", "holidays": "christmas",
+    "thanksgiving": "thanksgiving", "turkey": "thanksgiving",
+    "newyears": "newyears", "newyear": "newyears", "nye": "newyears",
+    "valentines": "valentines", "valentine": "valentines",
+    "stpatricks": "stpatricks", "stpatrick": "stpatricks", "stpatty": "stpatricks", "irish": "stpatricks",
+    "easter": "easter",
+    "july4th": "july4th", "fourth": "july4th", "independence": "july4th", "4th": "july4th", "july": "july4th",
+    "memorial": "memorial", "labor": "labor", "laborday": "labor",
+    "summer": "summer",
+}
+
+
+def _canon_season(folder_name):
+    key = re.sub(r"[^a-z0-9]", "", folder_name.strip().lower())
+    return _SEASON_ALIASES.get(key)
+
+
+def active_seasons(now=None):
+    """Canonical season names whose date window includes today (usually 0-1)."""
+    dt = datetime.fromtimestamp(now if now is not None else time.time())
+    return [name for name, win in _SEASON_WINDOWS.items() if win(dt.month, dt.day)]
+
+
 def scan_channels():
     channels = {}
     roots = [MEDIA_DIR / "TV"] + [r / "TV" for r in extra_media_roots()]
@@ -359,24 +400,61 @@ def scan_channels():
             num = str(int(m.group(1)))
             if not (3 <= int(num) <= 82):
                 continue
+            files, seasons = [], {}
             try:
-                files = sorted(f for f in entry.iterdir() if f.suffix.lower() in VIDEO_EXT)
+                for f in sorted(entry.iterdir()):
+                    if f.is_dir():
+                        sea = _canon_season(f.name)   # CH07/Halloween/ -> seasonal pool
+                        if sea:
+                            try:
+                                seasons.setdefault(sea, []).extend(
+                                    sorted(v for v in f.iterdir() if v.suffix.lower() in VIDEO_EXT))
+                            except OSError:
+                                pass
+                    elif f.suffix.lower() in VIDEO_EXT:
+                        files.append(f)
             except OSError:
-                files = []
-            ch = channels.setdefault(num, {"name": m.group(2), "path": entry, "files": []})
+                pass
+            ch = channels.setdefault(num, {"name": m.group(2), "path": entry, "files": [], "seasons": {}})
             ch["files"].extend(files)
+            for k, v in seasons.items():
+                ch["seasons"].setdefault(k, []).extend(v)
     return channels
 
 
 def scan_commercials():
-    spots = []
+    """Returns {'base': [...], 'seasons': {name: [...]}}. Holiday spots live in
+    COMMERCIALS/<Holiday>/ and are preferred while that holiday is in season."""
+    base, seasons = [], {}
     roots = [MEDIA_DIR / "TV" / "COMMERCIALS"] + [r / "TV" / "COMMERCIALS" for r in extra_media_roots()]
     for root in roots:
-        if root.is_dir():
-            try:
-                spots.extend(sorted(f for f in root.iterdir() if f.suffix.lower() in VIDEO_EXT))
-            except OSError:
-                pass
+        if not root.is_dir():
+            continue
+        try:
+            for f in sorted(root.iterdir()):
+                if f.is_dir():
+                    sea = _canon_season(f.name)
+                    if sea:
+                        try:
+                            seasons.setdefault(sea, []).extend(
+                                sorted(v for v in f.iterdir() if v.suffix.lower() in VIDEO_EXT))
+                        except OSError:
+                            pass
+                elif f.suffix.lower() in VIDEO_EXT:
+                    base.append(f)
+        except OSError:
+            pass
+    return {"base": base, "seasons": seasons}
+
+
+def effective_commercials(commercials, now=None):
+    """Season-aware flat spot list: active holiday spots first, then base."""
+    if isinstance(commercials, list):
+        return commercials   # legacy shape
+    spots = []
+    for s in active_seasons(now):
+        spots.extend(commercials.get("seasons", {}).get(s, []))
+    spots.extend(commercials.get("base", []))
     return spots
 
 
@@ -432,6 +510,7 @@ def resolve_channel(chan, channels, commercials, guide3, dur_cache, now=None):
     sec_of_minute = dt.second
 
     ch = channels.get(chan)
+    commercials = effective_commercials(commercials, now)   # holiday spots first
     days = guide3.get(chan) or {}
     schedule = days.get(weekday, []) if isinstance(days, dict) else []
     # A channel with ANY programming (on any day) is a curated station: days
@@ -463,9 +542,17 @@ def resolve_channel(chan, channels, commercials, guide3, dur_cache, now=None):
         # player can re-resolve exactly on the boundary.
         return {"kind": "static", "reason": "gap_no_commercials", "until": gap_secs}
 
-    # never-programmed channel: continuous pseudo-broadcast, seeded by epoch
-    if ch and ch["files"]:
-        files = ch["files"]
+    # never-programmed channel: continuous pseudo-broadcast, seeded by epoch.
+    # A seasonal subfolder (CH07/Halloween/) takes over the rotation in season.
+    if ch and (ch.get("files") or ch.get("seasons")):
+        files = ch.get("files") or []
+        seasons = ch.get("seasons") or {}
+        for s in active_seasons(now):
+            if seasons.get(s):
+                files = seasons[s]   # holiday folder overrides normal rotation
+                break
+        if not files:
+            return {"kind": "static", "reason": "off_air"}
         durations = [dur_cache.get(f) or 300 for f in files]
         total = sum(durations)
         if total <= 0:
@@ -2235,7 +2322,9 @@ class GostState:
         # folder-derived default; the folder on disk is left untouched.
         names = self.config.get("channel_names", {}) or {}
         return {num: {"name": names.get(num, c["name"]),
-                      "files": [f.name for f in c["files"]]}
+                      "files": [f.name for f in c["files"]],
+                      "seasons": {s: [f.name for f in fl]
+                                  for s, fl in (c.get("seasons") or {}).items()}}
                 for num, c in self.channels.items()}
 
     def _audio_summary(self, tracks):
@@ -2249,10 +2338,13 @@ class GostState:
         return out
 
     def library_payload(self):
+        comm = self.commercials if isinstance(self.commercials, dict) else {"base": self.commercials, "seasons": {}}
         return {
             "type": "library", "channels": self.channel_summary(),
             "music": self._audio_summary(self.music),
             "podcasts": self._audio_summary(self.podcasts),
+            "active_seasons": active_seasons(),
+            "commercial_seasons": sorted(comm.get("seasons", {}).keys()),
         }
 
     async def library_watcher(self):
