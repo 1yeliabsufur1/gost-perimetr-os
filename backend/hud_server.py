@@ -237,15 +237,18 @@ MAP_REGIONS = {
 
 def latest_pmtiles_build():
     """Newest Protomaps daily build that answers a range request. The dated
-    URL rotates, so probe back from today (found via SSH: today returned 206)."""
+    URL rotates (today's isn't published until ~midday UTC), so probe back
+    from today. NOTE: the CDN 403s the default Python-urllib User-Agent, so we
+    MUST send a curl-like UA -- without it every probe failed and maps looked
+    'offline' even with working internet (bailey 2026-07-17)."""
     import urllib.request
     from datetime import timedelta
     for d in range(0, 14):
         day = (datetime.utcnow() - timedelta(days=d)).strftime("%Y%m%d")
         url = "%s/%s.pmtiles" % (MAPS_BUILD_BASE, day)
         try:
-            req = urllib.request.Request(url)
-            req.add_header("Range", "bytes=0-0")
+            req = urllib.request.Request(url, headers={
+                "Range": "bytes=0-0", "User-Agent": "curl/8.5.0"})
             with urllib.request.urlopen(req, timeout=12) as r:
                 if r.status in (200, 206):
                     return url
@@ -1003,6 +1006,7 @@ class Telemetry:
         self.demo_t0 = time.time()
         self.obd_status = "idle"
         self.obd_port = ""
+        self.last_good = 0.0      # time of the last cycle that read ANY real PID
         self.diag_pause = False   # poll loop yields the port during on-screen diag
         self.dtc_path = STATE_DIR / "dtcs.json"
         self.dtcs = {}
@@ -1524,7 +1528,11 @@ class Telemetry:
                 # switching to real data the instant the adapter links up.
                 if not self.obd_linked:
                     now = time.time()
-                    if now - last_connect > 6:   # don't hammer the port
+                    # 3s (was 6): halve the showcase gap after a mid-session
+                    # drop so a transient USB/BT glitch recovers fast (bailey:
+                    # "seen it disconnect mid session"). connect_obd's own
+                    # duration keeps it from truly hammering.
+                    if now - last_connect > 3:
                         last_connect = now
                         self.values = {}
                         self.vtype = None

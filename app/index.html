@@ -776,24 +776,44 @@ function slotAvailability(daySchedule, fileDurationMin) {
  * ========================================================================== */
 const Net = {
   ws: null, connected: false, telemetry: null, library: { channels: {}, music: [] },
-  tvStatus: null,
+  tvStatus: null, _reconnectTimer: null,
   connect() {
     try {
       this.ws = new WebSocket("ws://127.0.0.1:8765");
-    } catch (e) { this.onFail(); return; }
-    this.ws.onopen = () => { this.connected = true; Demo.stop(); updateConnIndicator(); };
-    this.ws.onclose = () => { this.connected = false; updateConnIndicator(); this.onFail(); };
-    this.ws.onerror = () => { this.onFail(); };
+    } catch (e) { this.onDisconnect(); return; }
+    this.ws.onopen = () => {
+      this.connected = true;
+      Demo.stop();               // real backend wins -- kill the sim immediately
+      updateConnIndicator();
+      // Re-sync after a (re)connect so the UI isn't stale from the gap.
+      this.send({ type: "config.get" });
+    };
+    this.ws.onclose = () => { this.connected = false; updateConnIndicator(); this.onDisconnect(); };
+    this.ws.onerror = () => { try { this.ws.close(); } catch (e) {} };   // -> onclose -> reconnect
     this.ws.onmessage = (ev) => {
       let msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
       this.route(msg);
     };
-    setTimeout(() => { if (!this.connected) this.onFail(); }, 1500);
+    // If the socket never opens (backend not up yet), close it and retry.
+    setTimeout(() => {
+      if (!this.connected && this.ws && this.ws.readyState !== WebSocket.OPEN) {
+        try { this.ws.close(); } catch (e) {}
+        this.onDisconnect();
+      }
+    }, 2500);
   },
-  onFail() {
-    if (this._failed) return;
-    this._failed = true;
-    Demo.start();
+  // CRITICAL: the WS MUST keep reconnecting forever. The backend restarts
+  // (config change, TimeoutStopSec kill, brief crash) drop the socket; without
+  // this the UI fell to PREVIEW/showcase PERMANENTLY and the live link never
+  // came back without a page reload (bailey: "only shows auto/preview").
+  onDisconnect() {
+    Demo.start();                // keep the screen alive during the gap
+    updateConnIndicator();
+    if (this._reconnectTimer) return;   // one pending attempt at a time
+    this._reconnectTimer = setTimeout(() => {
+      this._reconnectTimer = null;
+      if (!this.connected) this.connect();
+    }, 2000);
   },
   route(msg) {
     if (msg.type === "telemetry") {

@@ -226,6 +226,18 @@ systemctl enable hud-kiosk.service
 # (a stray desktop install, a customization) can switch us to a graphical
 # target the kiosk isn't wired for.
 systemctl set-default multi-user.target 2>/dev/null || true
+# Mask getty on tty1 entirely: the kiosk owns that VT, and Conflicts= alone
+# still let a login prompt flash on some boots (bailey: "terminal on initial
+# load/bootup"). Masking guarantees no getty ever starts there. Recovery is
+# always SSH or another VT (Ctrl-Alt-F2), so this doesn't lock anyone out.
+systemctl mask getty@tty1.service 2>/dev/null || true
+
+# Quiet the boot console so text/log spam doesn't show before the dashboard.
+CMDLINE=/boot/firmware/cmdline.txt
+[ -f "$CMDLINE" ] || CMDLINE=/boot/cmdline.txt
+if [ -f "$CMDLINE" ] && ! grep -q 'gost-quiet' "$CMDLINE"; then
+  sed -i 's/$/ quiet loglevel=3 vt.global_cursor_default=0 logo.nologo consoleblank=0 gost-quiet/' "$CMDLINE"
+fi
 
 # ---------------------------------------------------------------------------
 # 7. SPI/I2C dtparam for MCP3008 pots / optional hardware, if not already set.
