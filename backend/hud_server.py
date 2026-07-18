@@ -9,6 +9,7 @@ degrade gracefully when absent -- never let missing hardware crash the loop.
 import asyncio
 import json
 import os
+import random
 import re
 import signal
 import socket
@@ -16,7 +17,8 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
+from urllib.parse import unquote, urlsplit, urlencode
+import urllib.request
 
 try:
     import websockets
@@ -2362,13 +2364,23 @@ class GostState:
 
     async def launch_app(self, url):
         await self.kill_apps()
-        for exe in ("chromium-browser", "chromium"):
+        # On the Pi this is the kiosk Chromium; the extra names + webbrowser
+        # fallback let it also work on a dev desktop (and report back either way).
+        for exe in ("chromium-browser", "chromium", "google-chrome", "chrome"):
             try:
                 self.app_proc = await asyncio.create_subprocess_exec(exe, "--kiosk", f"--app={url}")
-                return
+                return True
             except FileNotFoundError:
                 continue
-        log("no chromium binary found, cannot launch app for", url)
+        try:
+            import webbrowser
+            if webbrowser.open(url):
+                log("launched app via default browser:", url)
+                return True
+        except Exception as e:
+            log("webbrowser fallback failed:", e)
+        log("no browser found, cannot launch app for", url)
+        return False
 
     async def kill_apps(self):
         if self.app_proc and self.app_proc.returncode is None:
@@ -2385,6 +2397,170 @@ class GostState:
 
 
 # --------------------------------------------------------------- routing ----
+
+# --------------------------------------------------------- youtube search ----
+# CH83 is a browsable YouTube. YouTube blocks iframing its result pages, so the
+# kiosk can't scrape them client-side (CORS + X-Frame-Options). We fetch the
+# results page server-side here and pull video metadata out of the embedded
+# ytInitialData JSON -- no API key, so the .img stays turnkey. Results play in
+# the frameable /embed/ player on the frontend.
+_YT_UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+          "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+
+# Seed terms for CH83 "RANDOM" (lean-back) mode -- picking a random seed and a
+# random hit off it gives broad variety without a recommendation API/key.
+_YT_SEEDS = [
+    "F-150 PowerBoost", "off road trucks", "overlanding", "monster truck",
+    "diesel truck build", "car review 2024", "dashcam close calls",
+    "classic rock live", "synthwave mix", "guitar solo", "80s music video",
+    "space documentary", "nature 4k", "aviation cockpit", "history documentary",
+    "how its made", "top 10 facts", "comedy sketch", "cooking recipe",
+    "fishing", "national parks", "trending music",
+]
+
+
+def _yt_text(node):
+    if not isinstance(node, dict):
+        return ""
+    if "simpleText" in node:
+        return node["simpleText"] or ""
+    runs = node.get("runs")
+    if isinstance(runs, list):
+        return "".join(r.get("text", "") for r in runs if isinstance(r, dict))
+    return ""
+
+
+def _yt_collect(node, out):
+    """Recursively gather every videoRenderer dict (order-preserving)."""
+    if isinstance(node, dict):
+        vr = node.get("videoRenderer")
+        if isinstance(vr, dict) and vr.get("videoId"):
+            out.append(vr)
+        for v in node.values():
+            _yt_collect(v, out)
+    elif isinstance(node, list):
+        for v in node:
+            _yt_collect(v, out)
+
+
+# innertube config lifted from the results page, needed to fetch continuation
+# ("scroll") pages via the same private API youtube.com's own UI uses.
+_YT_CFG = {"key": None, "ver": None}
+
+
+def _yt_build(renderers, seen, limit):
+    out = []
+    for vr in renderers:
+        vid = vr.get("videoId")
+        title = _yt_text(vr.get("title"))
+        if not vid or vid in seen or not title:
+            continue
+        seen.add(vid)
+        out.append({
+            "id": vid,
+            "title": title,
+            "duration": _yt_text(vr.get("lengthText")),
+            "channel": _yt_text(vr.get("ownerText")) or _yt_text(vr.get("longBylineText")),
+            "views": _yt_text(vr.get("shortViewCountText")) or _yt_text(vr.get("viewCountText")),
+            "thumb": "https://i.ytimg.com/vi/%s/mqdefault.jpg" % vid,
+        })
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _yt_find_continuation(node):
+    """The search 'load-more' token. Must come from continuationItemRenderer --
+    grabbing any continuationCommand.token instead lands on a Shorts-shelf/menu
+    token whose continuation returns Shorts, not more search results."""
+    found = []
+
+    def walk(n):
+        if found:
+            return
+        if isinstance(n, dict):
+            cir = n.get("continuationItemRenderer")
+            if isinstance(cir, dict):
+                tok = (((cir.get("continuationEndpoint") or {})
+                        .get("continuationCommand") or {}).get("token"))
+                if tok:
+                    found.append(tok)
+                    return
+            for v in n.values():
+                walk(v)
+        elif isinstance(n, list):
+            for v in n:
+                walk(v)
+    walk(node)
+    return found[0] if found else None
+
+
+def _yt_fetch_search(query, limit=40):
+    url = "https://www.youtube.com/results?" + urlencode(
+        {"search_query": query, "hl": "en", "gl": "US"})
+    req = urllib.request.Request(url, headers={
+        "User-Agent": _YT_UA,
+        "Accept-Language": "en-US,en;q=0.9",
+        # skip the EU consent interstitial that otherwise replaces the results
+        "Cookie": "CONSENT=YES+cb.20210328-17-p0.en+FX+000",
+    })
+    with urllib.request.urlopen(req, timeout=8) as r:
+        html = r.read().decode("utf-8", "replace")
+    km = re.search(r'"INNERTUBE_API_KEY":"([^"]+)"', html)
+    vm = re.search(r'"INNERTUBE_CONTEXT_CLIENT_VERSION":"([^"]+)"', html)
+    if km:
+        _YT_CFG["key"] = km.group(1)
+    if vm:
+        _YT_CFG["ver"] = vm.group(1)
+    m = re.search(r"ytInitialData\s*=\s*({.+?})\s*;\s*</script>", html)
+    if not m:
+        m = re.search(r"var\s+ytInitialData\s*=\s*({.+?});", html)
+    if not m:
+        return {"results": [], "token": None}
+    data = json.loads(m.group(1))
+    renderers = []
+    _yt_collect(data, renderers)
+    return {"results": _yt_build(renderers, set(), limit),
+            "token": _yt_find_continuation(data)}
+
+
+def _yt_fetch_continuation(token, limit=40):
+    key = _YT_CFG.get("key") or "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"
+    ver = _YT_CFG.get("ver") or "2.20240401.00.00"
+    body = json.dumps({
+        "context": {"client": {"clientName": "WEB", "clientVersion": ver,
+                               "hl": "en", "gl": "US"}},
+        "continuation": token,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        "https://www.youtube.com/youtubei/v1/search?key=" + key,
+        data=body, headers={"User-Agent": _YT_UA, "Content-Type": "application/json",
+                            "Accept-Language": "en-US,en;q=0.9"})
+    with urllib.request.urlopen(req, timeout=8) as r:
+        data = json.loads(r.read().decode("utf-8", "replace"))
+    renderers = []
+    _yt_collect(data, renderers)
+    return {"results": _yt_build(renderers, set(), limit),
+            "token": _yt_find_continuation(data)}
+
+
+async def youtube_search(query):
+    loop = asyncio.get_event_loop()
+    try:
+        return await loop.run_in_executor(None, _yt_fetch_search, query)
+    except Exception as e:
+        log("youtube search failed:", e)
+        return {"results": [], "token": None}
+
+
+async def youtube_more(token):
+    loop = asyncio.get_event_loop()
+    try:
+        return await loop.run_in_executor(None, _yt_fetch_continuation, token)
+    except Exception as e:
+        log("youtube continuation failed:", e)
+        return {"results": [], "token": None}
+
 
 async def route_message(state: GostState, ws, msg):
     t = msg.get("type")
@@ -2407,9 +2583,33 @@ async def route_message(state: GostState, ws, msg):
     elif t == "config.get":
         await ws.send(json.dumps({"type": "config", **state.config.data}))
     elif t == "app.launch":
-        await state.launch_app(msg.get("url"))
+        ok = await state.launch_app(msg.get("url"))
+        await ws.send(json.dumps({"type": "app.launch", "ok": bool(ok), "url": msg.get("url")}))
     elif t == "app.kill":
         await state.kill_apps()
+    elif t == "youtube.search":
+        q = (msg.get("query") or "").strip()
+        r = await youtube_search(q) if q else {"results": [], "token": None}
+        await ws.send(json.dumps({"type": "youtube.results", "query": q,
+                                  "results": r["results"], "token": r.get("token")}))
+    elif t == "youtube.more":
+        token = msg.get("token")
+        r = await youtube_more(token) if token else {"results": [], "token": None}
+        await ws.send(json.dumps({"type": "youtube.more", "query": msg.get("query"),
+                                  "results": r["results"], "token": r.get("token")}))
+    elif t == "youtube.random":
+        # Mix several DISTINCT seeds per batch and take a few from each, so a
+        # single pool isn't 20 videos of the same theme (bailey: "nothing but
+        # nature documentaries"). Fetches run concurrently.
+        seeds = random.sample(_YT_SEEDS, min(5, len(_YT_SEEDS)))
+        batches = await asyncio.gather(*[youtube_search(s) for s in seeds])
+        results = []
+        for batch in batches:
+            vids = batch.get("results", [])
+            random.shuffle(vids)
+            results.extend(vids[:4])
+        random.shuffle(results)
+        await ws.send(json.dumps({"type": "youtube.random", "seed": ", ".join(seeds), "results": results}))
     elif t == "wifi.scan":
         await ws.send(json.dumps({"type": "wifi.scan", "networks": await wifi_scan()}))
     elif t == "wifi.join":

@@ -281,6 +281,42 @@ a { color: var(--pri); }
 #overlay-titlebar { padding:8px 12px; border-bottom:1px solid var(--line); font-size:13px; display:flex; justify-content:space-between; }
 #overlay-frame { flex:1; border:none; background:#fff; }
 
+/* ---- CH83 in-app YouTube browser (amber CRT skin) ---- */
+#yt-browser { position: fixed; inset: 0; z-index: 520; display:flex; flex-direction:column; background: var(--bg); }
+#yt-bar { padding:8px 12px; border-bottom:1px solid var(--line); display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+#yt-bar .yt-brand { font-size:13px; letter-spacing:1px; }
+#yt-search-input { flex:1; min-width:140px; }
+#yt-msg { padding:6px 12px; font-size:12px; }
+/* Two things make this scroll with un-squished cards:
+ *  - min-height:0 lets this flex child shrink so overflow-y:auto can scroll;
+ *  - grid-auto-rows:min-content pins each row to its content height. Without it
+ *    the implicit rows stretch to fill the fixed-height grid, squishing cards to
+ *    thumbnail-only and hiding the titles. (max-content miscomputes with the
+ *    aspect-ratio thumbs -- min-content is the correct keyword here.) */
+#yt-results { flex:1; min-height:0; overflow-y:auto; display:grid;
+  grid-template-columns:repeat(auto-fill, minmax(210px, 1fr)); grid-auto-rows:min-content;
+  gap:10px; padding:12px; align-content:start; }
+.yt-card { display:flex; flex-direction:column; text-align:left; padding:0; background:transparent; border:1px solid var(--line); overflow:hidden; cursor:pointer; }
+.yt-card:focus, .yt-card:hover { outline:2px solid var(--pri); }
+.yt-thumb { width:100%; aspect-ratio:16/9; object-fit:cover; background:#111; display:block; filter:sepia(0.5) hue-rotate(345deg) saturate(1.4) brightness(0.95); }
+.yt-dur { align-self:flex-end; margin:-22px 4px 0 0; padding:1px 5px; font-size:11px; background:rgba(0,0,0,0.75); color:var(--pri); position:relative; z-index:1; }
+/* auto top/bottom margins center the title+meta block in the card's leftover
+ * space (rows stretch to the tallest card) so short titles sit centered under
+ * the thumbnail instead of jammed against it. */
+.yt-title { margin-top:auto; padding:6px 8px 2px; font-size:13px; line-height:1.25; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+.yt-meta { margin-bottom:auto; padding:0 8px 8px; font-size:11px; }
+#yt-player { position:fixed; inset:0; z-index:540; display:flex; flex-direction:column; background:#000; }
+#yt-player-bar { padding:8px 12px; border-bottom:1px solid var(--line); font-size:13px; display:flex; justify-content:space-between; gap:8px; background:var(--bg); }
+#yt-player-title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#yt-player-frame { flex:1; border:none; background:#000; }
+/* RANDOM toggle lives in the player's top bar (not over the video) so it never
+ * collides with YouTube's persistent bottom-right watermark. Amber-outlined,
+ * fills solid amber + glows when active. */
+#yt-shuffle-fab { padding:6px 12px; font-size:12px; font-weight:bold; letter-spacing:0.5px;
+  background:var(--bg); border:2px solid var(--pri); color:var(--pri); cursor:pointer; white-space:nowrap; }
+#yt-shuffle-fab:hover, #yt-shuffle-fab:focus { outline:2px solid var(--pri); outline-offset:1px; }
+#yt-shuffle-fab.on { background:var(--pri); color:var(--bg); box-shadow:0 0 10px var(--pri); }
+
 /* ---- Modal (Wi-Fi, etc.) ---- */
 #modal { position: fixed; inset: 0; z-index: 600; display:flex; align-items:center; justify-content:center; background: rgba(0,0,0,0.75); }
 #modal .frame { background: var(--bg); width: min(520px, 90vw); max-height: 80vh; overflow:auto; margin:0; }
@@ -528,13 +564,6 @@ a { color: var(--pri); }
           </div>
           <div id="bt-list"></div>
         </div>
-        <div class="frame" data-title="YOUTUBE (CH 83)">
-          <div class="settings-row">
-            <input type="text" id="yt-url-input" style="flex:1;" placeholder="paste a YouTube video or playlist URL">
-            <button data-focus id="yt-save-btn">[ SAVE ]</button>
-          </div>
-          <div id="yt-status" class="dim" style="font-size:11px;"></div>
-        </div>
         <div class="frame" data-title="THEME">
           <div class="settings-row" id="theme-swatches"></div>
         </div>
@@ -598,6 +627,28 @@ a { color: var(--pri); }
       <button id="overlay-close-btn">[ CLOSE ]</button>
     </div>
     <iframe id="overlay-frame"></iframe>
+  </div>
+
+  <div id="yt-browser" class="hidden">
+    <div id="yt-bar">
+      <span class="yt-brand">CH83 // YOUTUBE</span>
+      <input type="text" id="yt-search-input" data-focus placeholder="search youtube...">
+      <button data-focus id="yt-search-btn">[ SEARCH ]</button>
+      <button data-focus id="yt-random-btn">[ &#8646; RANDOM ]</button>
+      <button data-focus id="yt-full-btn">[ OPEN FULL YOUTUBE ]</button>
+      <button data-focus id="yt-close-btn">[ BACK TO TV ]</button>
+    </div>
+    <div id="yt-msg" class="dim"></div>
+    <div id="yt-results"></div>
+  </div>
+
+  <div id="yt-player" class="hidden">
+    <div id="yt-player-bar">
+      <span id="yt-player-title"></span>
+      <button id="yt-shuffle-fab" data-focus title="play random videos back-to-back">&#8646; RANDOM</button>
+      <button data-focus id="yt-player-close-btn">[ BACK TO RESULTS ]</button>
+    </div>
+    <iframe id="yt-player-frame" allow="autoplay; encrypted-media; fullscreen" allowfullscreen></iframe>
   </div>
 
   <audio id="global-audio"></audio>
@@ -969,6 +1020,10 @@ const Net = {
     else if (msg.type === "update.check") { $("#update-result").textContent = msg.ok ? "UP TO DATE" : "CHECK FAILED"; }
     else if (msg.type === "clock.set") { $("#clock-set-result").textContent = msg.ok ? "CLOCK SET" : "FAILED -- CHECK DEVICE LOGS"; }
     else if (msg.type === "system.info") { renderAbout(msg); }
+    else if (msg.type === "youtube.results") { YT.onResults(msg); }
+    else if (msg.type === "youtube.more") { YT.onMore(msg); }
+    else if (msg.type === "youtube.random") { YT.onRandom(msg); }
+    else if (msg.type === "app.launch") { YT.onFullLaunch(msg); }
   },
   send(obj) { if (this.connected && this.ws) { try { this.ws.send(JSON.stringify(obj)); } catch (e) {} } },
 };
@@ -1216,6 +1271,8 @@ function handleAction(action) {
 function universalBack() {
   if (Modal.isOpen()) { Modal.close(); return; }
   if (Overlay.isOpen()) { Overlay.close(); return; }
+  if (YT.playerOpen()) { YT.stopPlayer(); return; }   // player -> back to results
+  if (YT.isOpen()) { YT.close(); TV.exit(); return; }  // results -> back to TV
   if (TV.watching) { TV.exit(); return; }
   if (Nav.destMode) { Nav.toggleDestMode(); return; }
   if (Nav.mapMode) { Nav.toggleMapMode(); return; }
@@ -2047,6 +2104,7 @@ const TV = {
     // YouTube is a frontend overlay regardless of backend -- handle before the
     // device tv.tune so it always uses the configured (working) embed.
     if (chan === "83") { openYouTube(); return; }
+    if (YT.isOpen()) YT.close();  // tuned away from 83
     if (Net.connected) { Net.send({ type: "tv.tune", chan }); renderTvStatus(); return; }
     this._playLocal();
     if (this.reresolveTimer) clearInterval(this.reresolveTimer);
@@ -2067,6 +2125,7 @@ const TV = {
   },
   exit() {
     this.watching = false; this.chan = null;
+    if (YT.isOpen()) YT.close();
     if (this.reresolveTimer) { clearInterval(this.reresolveTimer); this.reresolveTimer = null; }
     if (this.boundaryTimer) { clearTimeout(this.boundaryTimer); this.boundaryTimer = null; }
     stopStaticAnim();
@@ -2323,27 +2382,228 @@ function ytToEmbed(url) {
   if (url.indexOf("/embed/") >= 0) return url;
   return null;
 }
-function openYouTube() {
-  $("#tv-idle").classList.add("hidden");
-  $("#tv-video").classList.add("hidden"); $("#tv-video").pause();
-  $("#tv-static-canvas").classList.add("hidden"); stopStaticAnim();
-  $("#tv-overlay-text").textContent = "CH83 -- YOUTUBE (HOLD <- 5s TO RETURN)";
-  const embed = Config.data.yt_embed;
-  if (embed) { Overlay.open(embed); return; }
-  Modal.open("SET YOUTUBE CHANNEL", (body) => {
-    body.appendChild(el("div", { class: "dim", style: "margin-bottom:6px;" },
-      ["Paste a YouTube video or playlist URL for channel 83 (also settable in SETTINGS):"]));
-    const inp = el("input", { type: "text", "data-focus": "", placeholder: "youtube.com/watch?v=...  or  /playlist?list=..." });
-    body.appendChild(inp);
-    const save = el("button", { "data-focus": "", style: "margin-top:8px;" }, ["[ SET & PLAY ]"]);
-    save.addEventListener("click", () => {
+/* Channel 83 is a browsable YouTube, not a single pasted link. The amber
+ * in-app browser (YT module) searches via the device backend (which scrapes
+ * results server-side -- YouTube blocks iframing its search pages, so we can't
+ * just load youtube.com in a frame) and plays hits in the frameable /embed/
+ * player. [ OPEN FULL YOUTUBE ] escalates to a real Chromium kiosk on device. */
+const YT = {
+  loaded: false,
+  open() {
+    $("#tv-idle").classList.add("hidden");
+    $("#tv-video").classList.add("hidden"); $("#tv-video").pause();
+    $("#tv-static-canvas").classList.add("hidden"); stopStaticAnim();
+    $("#tv-overlay-text").textContent = "CH83 -- YOUTUBE";
+    $("#yt-browser").classList.remove("hidden");
+    if (!this.loaded) { this.loaded = true; this.search(Config.data.yt_query || "F-150 PowerBoost"); }
+    setTimeout(() => $("#yt-search-input").focus(), 0);
+  },
+  close() {
+    this.stopPlayer();
+    $("#yt-browser").classList.add("hidden");
+  },
+  isOpen() { return !$("#yt-browser").classList.contains("hidden"); },
+  playerOpen() { return !$("#yt-player").classList.contains("hidden"); },
+  search(q) {
+    q = (q || "").trim();
+    if (!q) return;
+    this.query = q;
+    this.token = null; this.loadingMore = false;   // reset paging for the new query
+    Config.set("yt_query", q);
+    $("#yt-search-input").value = q;
+    $("#yt-results").innerHTML = "";
+    if (Net.connected) {
+      $("#yt-msg").textContent = "searching \"" + q + "\"...";
+      Net.send({ type: "youtube.search", query: q });
+    } else {
+      // No backend (standalone/dev preview): can't scrape, and youtube.com
+      // won't iframe. Offer the direct-link fallback + full-site escape hatch.
+      $("#yt-msg").textContent = "search runs on the device backend. In preview, open a video by link:";
+      this.linkFallback();
+    }
+  },
+  linkFallback() {
+    const box = $("#yt-results");
+    const inp = el("input", { type: "text", "data-focus": "", placeholder: "paste youtube.com/watch?v=...", style: "grid-column:1/-1;" });
+    const go = el("button", { "data-focus": "", style: "grid-column:1/-1;", onclick: () => {
       const e = ytToEmbed(inp.value.trim());
-      if (!e) { inp.value = ""; inp.placeholder = "not a valid YouTube URL -- try again"; return; }
-      Config.set("yt_embed", e); Modal.close(); Overlay.open(e);
-    });
-    body.appendChild(el("div", { style: "margin-top:8px;" }, [save]));
-  });
-}
+      if (!e) { inp.placeholder = "not a valid YouTube URL -- try again"; inp.value = ""; return; }
+      $("#yt-player-frame").src = e + (e.indexOf("?") >= 0 ? "&" : "?") + "autoplay=1";
+      $("#yt-player-title").textContent = inp.value.trim();
+      $("#yt-player").classList.remove("hidden");
+    } }, ["[ PLAY LINK ]"]);
+    box.appendChild(inp); box.appendChild(go);
+  },
+  card(v) {
+    return el("button", { class: "yt-card", "data-focus": "", onclick: () => YT.play(v) }, [
+      el("img", { class: "yt-thumb", src: v.thumb || ("https://i.ytimg.com/vi/" + v.id + "/mqdefault.jpg"), loading: "lazy" }),
+      v.duration ? el("div", { class: "yt-dur" }, [v.duration]) : el("span"),
+      el("div", { class: "yt-title" }, [v.title]),
+      el("div", { class: "yt-meta dim" }, [(v.channel || "") + (v.views ? "  " + v.views : "")]),
+    ]);
+  },
+  addCards(list) {                                  // append, skipping ids already shown; returns # added
+    const box = $("#yt-results");
+    if (!this.seenIds) this.seenIds = new Set();
+    let n = 0;
+    for (const v of (list || [])) {
+      if (!v || !v.id || this.seenIds.has(v.id)) continue;
+      this.seenIds.add(v.id);
+      box.appendChild(this.card(v));
+      n++;
+    }
+    return n;
+  },
+  // Keep pulling pages until the grid actually overflows -- otherwise a short
+  // first page (16 hits) can't be scrolled, so scroll-triggered paging never
+  // fires and it looks capped. Once it overflows, normal scroll takes over.
+  maybeFill() {
+    const box = $("#yt-results");
+    // Cap auto-fill pages so a viewport that never reports overflow can't loop
+    // forever; past the cap the user's own scrolling drives further loading.
+    if (this.autoFills >= 8) return;
+    if (this.token && !this.loadingMore && box.scrollHeight <= box.clientHeight + 80) {
+      this.autoFills++;
+      this.loadMore();
+    }
+  },
+  onResults(msg) {
+    if (!this.isOpen() || msg.query !== this.query) return;
+    const box = $("#yt-results"); box.innerHTML = "";
+    this.seenIds = new Set();
+    this.token = msg.token || null; this.loadingMore = false; this.autoFills = 0;
+    if (!msg.results || !msg.results.length) {
+      $("#yt-msg").textContent = "no results for \"" + msg.query + "\" (or YouTube is unreachable)";
+      return;
+    }
+    $("#yt-msg").textContent = "";
+    this.addCards(msg.results);
+    this.maybeFill();
+  },
+  // Infinite scroll: pull the next continuation page as the user nears the end.
+  loadMore() {
+    if (!this.token || this.loadingMore || !Net.connected) return;
+    this.loadingMore = true;
+    Net.send({ type: "youtube.more", token: this.token, query: this.query });
+  },
+  onMore(msg) {
+    // Drop a continuation that belongs to a previous query (the user searched
+    // again while this page was in flight) -- else it pollutes the new grid.
+    if (!this.isOpen() || (msg.query != null && msg.query !== this.query)) return;
+    this.loadingMore = false;
+    this.token = msg.token || null;                 // null token => no more pages
+    const added = this.addCards(msg.results);
+    if (added > 0) this.maybeFill();                // keep filling only while making progress
+  },
+  play(v, keepShuffle) {
+    if (!keepShuffle) this.shuffle = false;   // tapping a specific video exits random mode
+    this.current = v;
+    // enablejsapi=1 lets the embed postMessage us its state (we watch for
+    // ENDED to auto-advance random mode -- see the message listener below).
+    $("#yt-player-frame").src = "https://www.youtube-nocookie.com/embed/" + v.id + "?autoplay=1&rel=0&enablejsapi=1";
+    $("#yt-player-title").textContent = v.title || "";
+    $("#yt-player").classList.remove("hidden");
+    this.updateFab();
+  },
+  stopPlayer() {
+    this.shuffle = false;
+    $("#yt-player-frame").src = "about:blank";
+    $("#yt-player").classList.add("hidden");
+    this.updateFab();
+  },
+  /* ---- RANDOM / lean-back mode ---- */
+  toggleShuffle() { if (this.shuffle) { this.shuffle = false; this.updateFab(); } else { this.startRandom(); } },
+  startRandom() {
+    this.shuffle = true;
+    if (!this.isOpen()) this.open();
+    if (this.pool && this.pool.length) this.playNextRandom();
+    else { $("#yt-msg").textContent = "loading random video..."; this.requestRandom(); }
+    this.updateFab();
+  },
+  requestRandom() {
+    if (Net.connected) Net.send({ type: "youtube.random" });
+    else if (this.pool && this.pool.length) { /* reuse existing pool in dev */ }
+    else $("#yt-msg").textContent = "RANDOM needs the device backend";
+  },
+  advanceRandom() {   // debounced: one bad video can post onError + a state event
+    // 450ms swallows a single video's onError+onStateChange burst (they arrive
+    // together) without also swallowing the NEXT video's genuine quick error.
+    const now = Date.now();
+    if (this._lastAdv && now - this._lastAdv < 450) return;
+    this._lastAdv = now;
+    this.playNextRandom();
+  },
+  playNextRandom() {
+    if (!this.pool || this.pool.length < 2) this.requestRandom();   // top up before we run dry
+    if (!this.pool || !this.pool.length) { this._pendingAdvance = true; return; }  // onRandom will resume
+    this._pendingAdvance = false;
+    const v = this.pool.splice(Math.floor(Math.random() * this.pool.length), 1)[0];
+    this.play(v, true);
+  },
+  onRandom(msg) {
+    const seen = new Set();
+    this.pool = (this.pool || []).concat(msg.results || [])
+      .filter(v => v && v.id && !seen.has(v.id) && seen.add(v.id)).slice(0, 60);
+    // Kick off playback if we're waiting: either nothing is playing yet, or a
+    // video ended while the pool was empty (_pendingAdvance).
+    if (this.shuffle && (!this.playerOpen() || this._pendingAdvance)) this.playNextRandom();
+  },
+  updateFab() {
+    const b = $("#yt-shuffle-fab"); if (!b) return;
+    b.classList.toggle("on", !!this.shuffle);
+    b.innerHTML = this.shuffle ? "&#8646; RANDOM ON" : "&#8646; RANDOM";
+  },
+  openFull() {
+    const url = "https://m.youtube.com";
+    if (Net.connected) {
+      Net.send({ type: "app.launch", url });
+      $("#yt-msg").textContent = "launching full YouTube...";
+    } else {
+      Overlay.open(url); // dev preview: YouTube blocks framing, but nothing else to try here
+    }
+  },
+  onFullLaunch(msg) {
+    if (!this.isOpen()) return;
+    $("#yt-msg").textContent = msg.ok
+      ? "full YouTube launched -- press BACK on the unit to return to TV"
+      : "couldn't launch a browser on this machine (device has Chromium; this dev box may not)";
+  },
+};
+function openYouTube() { YT.open(); }
+$("#yt-search-btn") && $("#yt-search-btn").addEventListener("click", () => YT.search($("#yt-search-input").value));
+$("#yt-search-input") && $("#yt-search-input").addEventListener("keydown", (e) => { if (e.key === "Enter") YT.search(e.target.value); });
+$("#yt-full-btn") && $("#yt-full-btn").addEventListener("click", () => YT.openFull());
+$("#yt-close-btn") && $("#yt-close-btn").addEventListener("click", () => { YT.close(); TV.exit(); });
+$("#yt-player-close-btn") && $("#yt-player-close-btn").addEventListener("click", () => YT.stopPlayer());
+$("#yt-random-btn") && $("#yt-random-btn").addEventListener("click", () => YT.startRandom());
+$("#yt-results") && $("#yt-results").addEventListener("scroll", (e) => {
+  const b = e.target;
+  if (b.scrollTop + b.clientHeight >= b.scrollHeight - 500) YT.loadMore();
+});
+$("#yt-shuffle-fab") && $("#yt-shuffle-fab").addEventListener("click", () => YT.toggleShuffle());
+// The /embed/ player (enablejsapi=1) needs a "listening" handshake before it
+// will post state changes; (re)send it whenever a new video loads.
+$("#yt-player-frame") && $("#yt-player-frame").addEventListener("load", () => {
+  const f = $("#yt-player-frame");
+  if (!f.src || f.src.indexOf("/embed/") < 0) return;
+  try {
+    const w = f.contentWindow;
+    w.postMessage(JSON.stringify({ event: "listening", id: "gost-yt", channel: "widget" }), "*");
+    w.postMessage(JSON.stringify({ event: "command", func: "addEventListener", args: ["onStateChange"], id: "gost-yt", channel: "widget" }), "*");
+    w.postMessage(JSON.stringify({ event: "command", func: "addEventListener", args: ["onError"], id: "gost-yt", channel: "widget" }), "*");
+  } catch (e) { /* cross-origin timing -- next load retries */ }
+});
+// In RANDOM mode: advance to the next video when the current one ENDS (state 0)
+// OR errors out (onError: embedding disabled / removed / region-locked -- very
+// common on random hits, so we skip instead of sitting on "video unavailable").
+window.addEventListener("message", (e) => {
+  if (typeof e.data !== "string" || String(e.origin).indexOf("youtube") < 0) return;
+  if (!YT.shuffle) return;
+  let d; try { d = JSON.parse(e.data); } catch (_) { return; }
+  const ended = (d.event === "onStateChange" && d.info === 0)
+    || (d.event === "infoDelivery" && d.info && d.info.playerState === 0);
+  if (ended || d.event === "onError") YT.advanceRandom();
+});
 
 function renderTvChannelList() {
   const box = $("#tv-channels");
@@ -3371,12 +3631,8 @@ function buildSettings() {
   updateUnitButtons();
   $("#wifi-scan-btn").addEventListener("click", () => Wifi.open());
   $("#tv-guide-btn").addEventListener("click", () => TvGuide.toggle());
-  const ytInit = $("#yt-url-input"); if (ytInit && Config.data.yt_embed) $("#yt-status").textContent = "current: " + Config.data.yt_embed;
-  $("#yt-save-btn").addEventListener("click", () => {
-    const e = ytToEmbed($("#yt-url-input").value.trim());
-    if (!e) { $("#yt-status").textContent = "not a valid YouTube URL"; return; }
-    Config.set("yt_embed", e); $("#yt-status").textContent = "saved: " + e; $("#yt-url-input").value = "";
-  });
+  // (CH83 default search term is auto-remembered from the last search; no
+  // separate Settings control needed -- the search bar lives in CH83 itself.)
   // The diagnostic runs from Settings AND from the DRIVE tab (bailey: DRIVE
   // is the diagnostics screen). Same backend call; both status spans update.
   const setDiagStatus = (txt) => {
