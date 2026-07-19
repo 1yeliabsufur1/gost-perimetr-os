@@ -7,28 +7,125 @@
 <link rel="stylesheet" href="vendor/maplibre-gl.css">
 <style>
 /* ============================== THEMES ============================== */
-:root, [data-theme="gost"]     { --pri:#ffb000; --dim:#7a5200; --bg:#0d0904; --warn:#ff3b30; --glow:#ffb000; --line:#8a5a00; }
-[data-theme="perimetr"]        { --pri:#ff3b30; --dim:#701010; --bg:#0a0505; --warn:#ffcc00; --glow:#ff3b30; --line:#8f2020; }
-[data-theme="fosfor"]          { --pri:#33ff66; --dim:#0e5a24; --bg:#040a05; --warn:#ff5533; --glow:#33ff66; --line:#1f8f45; }
-[data-theme="argon"]           { --pri:#38e0ff; --dim:#0d5a6e; --bg:#04090a; --warn:#ff5533; --glow:#38e0ff; --line:#1f7f90; }
-[data-theme="kremlin"]         { --pri:#eaeaea; --dim:#6a6a6a; --bg:#0a0a0a; --warn:#ff3b30; --glow:#eaeaea; --line:#5a5a5a; }
-[data-theme="okhra"]           { --pri:#ffd23d; --dim:#8a6a10; --bg:#0a0704; --warn:#ff3b30; --glow:#ffd23d; --line:#8a6a10; }
+/* Themes now drive structure too, not just color: --font, --scan (scanline
+   strength), --radius (corner rounding), --letter (tracking). CRT themes take
+   the :root defaults; 'anime' overrides them for a totally different feel. */
+:root, [data-theme="gost"]     { --pri:#ffb000; --dim:#7a5200; --bg:#0d0904; --warn:#ff3b30; --glow:#ffb000; --line:#8a5a00;
+                                 --font:"Courier New", ui-monospace, "Cascadia Mono", monospace; --scan:1; --radius:0px; --letter:0.5px; --fsize:15px;
+                                 --thumb-filter:sepia(0.5) hue-rotate(345deg) saturate(1.4) brightness(0.95); }
+/* SAKURA DREAM -- 90s/2000s pastel + vaporwave anime: twilight plum, pastel-neon
+   pink, rounded Baloo font, soft VHS bloom (not hard CRT scanlines), round panels */
+[data-theme="anime"]           { --pri:#ff93d1; --dim:#a684c4; --bg:#1e1236; --warn:#ffd166; --glow:#ff7ac6; --line:#8158b0;
+                                 --font:"Baloo 2","Trebuchet MS",system-ui,sans-serif; --scan:0.16; --radius:11px; --letter:0.3px; --fsize:16px;
+                                 --bg-grad:linear-gradient(165deg,#141a33 0%,#241548 40%,#3c1652 72%,#20264a 100%);
+                                 --panel-glow:0 0 18px rgba(255,122,198,0.22), inset 0 0 26px rgba(255,122,198,0.05);
+                                 --btn-glow:0 2px 10px rgba(255,122,198,0.18); --thumb-filter:saturate(1.12) brightness(1.03); }
+@font-face { font-family:"Baloo 2"; src:url("vendor/baloo2.woff2") format("woff2"); font-weight:400 800; font-display:swap; }
+/* ---------- SAKURA DREAM extras: display font, shimmer, pill headers, grid horizon ---------- */
+@font-face { font-family:"Titan One"; src:url("vendor/titanone.woff2") format("woff2"); font-display:swap; }
+[data-theme="anime"] { --display:"Titan One","Baloo 2",sans-serif; }
+/* slow gradient breathing (26s, subtle -- lofi-loop vibe, easy on the Pi) */
+[data-theme="anime"] body { background-size:300% 300%; animation:sakuraDrift 26s ease-in-out infinite; }
+@keyframes sakuraDrift { 0%{background-position:0% 35%} 50%{background-position:100% 65%} 100%{background-position:0% 35%} }
+/* vaporwave perspective grid fading up from the bottom edge (behind the UI) */
+[data-theme="anime"] body::after {
+  content:""; position:fixed; left:-10%; right:-10%; bottom:0; height:42%; z-index:-1; pointer-events:none;
+  background-image:
+    repeating-linear-gradient(90deg, rgba(255,140,214,0.20) 0 2px, transparent 2px 48px),
+    repeating-linear-gradient(0deg,  rgba(120,224,255,0.15) 0 2px, transparent 2px 48px);
+  transform:perspective(340px) rotateX(64deg); transform-origin:bottom center;
+  -webkit-mask-image:linear-gradient(to top,#000 0%,transparent 82%); mask-image:linear-gradient(to top,#000 0%,transparent 82%);
+  opacity:0.6;
+}
+/* headers in the chunky display font */
+[data-theme="anime"] #clock,
+[data-theme="anime"] .osd-num { font-family:var(--display); letter-spacing:1px; }
+/* pill-tab panel headers (drop the box-drawing dashes, add a glow) */
+[data-theme="anime"] .frame::before {
+  content:attr(data-title); font-family:var(--display); top:-13px; padding:3px 14px 4px; letter-spacing:1px;
+  border:1px solid var(--line); border-radius:999px; box-shadow:0 0 12px rgba(255,122,198,0.45); text-shadow:0 0 8px var(--glow);
+}
+/* ---------- GAME BOY (DMG 4-green mono; [data-gbc] switches to Game Boy Color) ---------- */
+@font-face { font-family:"Pixelify Sans"; src:url("vendor/pixelify.woff2") format("woff2"); font-weight:400 700; font-display:swap; }
+[data-theme="gameboy"] {
+  --pri:#0f380f; --dim:#306230; --bg:#9bbc0f; --warn:#306230; --glow:#306230; --line:#0f380f;
+  --font:"Pixelify Sans","Courier New",monospace; --display:"Pixelify Sans",monospace;
+  --scan:0; --radius:0px; --letter:0.5px; --fsize:18px;
+  --thumb-filter:grayscale(1) sepia(1) saturate(2.2) hue-rotate(38deg) brightness(1.05) contrast(0.95);
+}
+/* Game Boy Color: vivid multi-hue screen (grape purple + magenta/cyan/yellow) */
+[data-theme="gameboy"][data-gbc] {
+  --pri:#8dffe0; --dim:#c89bff; --bg:#3a1a6b; --warn:#ffe14d; --glow:#5ce1ff; --line:#ff6ad0;
+  --bg-grad:linear-gradient(150deg,#3a1a6b 0%,#6b1a7d 42%,#2a1e72 72%,#1a3f85 100%);
+  --panel-glow:0 0 14px rgba(255,106,208,0.28);
+  --thumb-filter:saturate(1.5) contrast(1.06) brightness(1.03);
+}
+/* LCD dot-matrix pixel grid (behind the UI) */
+[data-theme="gameboy"] body::after {
+  content:""; position:fixed; inset:0; z-index:-1; pointer-events:none; opacity:0.5;
+  background-image:
+    repeating-linear-gradient(90deg, rgba(15,56,15,0.11) 0 1px, transparent 1px 4px),
+    repeating-linear-gradient(0deg,  rgba(15,56,15,0.11) 0 1px, transparent 1px 4px);
+}
+[data-theme="gameboy"][data-gbc] body::after {
+  background-image:
+    repeating-linear-gradient(90deg, rgba(0,0,0,0.20) 0 1px, transparent 1px 4px),
+    repeating-linear-gradient(0deg,  rgba(0,0,0,0.20) 0 1px, transparent 1px 4px);
+}
+/* Game Boy Color: animated RAINBOW lettering on headers/accents (not body text) */
+[data-theme="gameboy"][data-gbc] .yt-brand,
+[data-theme="gameboy"][data-gbc] #clock,
+[data-theme="gameboy"][data-gbc] .glow,
+[data-theme="gameboy"][data-gbc] .osd-num {
+  background:linear-gradient(90deg,#ff5e5e,#ffd24d,#7bff6b,#5ce1ff,#b98dff,#ff6ad0,#ff5e5e);
+  background-size:200% auto; -webkit-background-clip:text; background-clip:text;
+  -webkit-text-fill-color:transparent; color:transparent; text-shadow:none;
+  animation:rainbowText 6s linear infinite;
+}
+@keyframes rainbowText { to { background-position:200% center; } }
+/* ---------- UNDERTALE (stark black/white/red SOUL; [data-dr] = DELTARUNE color) ---------- */
+@font-face { font-family:"VT323"; src:url("vendor/vt323.woff2") format("woff2"); font-display:swap; }
+[data-theme="undertale"] {
+  --pri:#ffffff; --dim:#9a9a9a; --bg:#000000; --warn:#ff2b2b; --glow:#ffffff; --line:#ffffff;
+  --font:"VT323","Courier New",monospace; --display:"VT323",monospace;
+  --scan:0; --radius:0px; --letter:1px; --fsize:19px;
+  --thumb-filter:grayscale(1) contrast(1.15) brightness(0.95);
+}
+/* DELTARUNE dark-world color variant */
+[data-theme="undertale"][data-dr] {
+  --pri:#ffffff; --dim:#9a86c8; --bg:#0a0812; --warn:#ff3b5c; --glow:#5ceaff; --line:#b45cff;
+  --bg-grad:radial-gradient(ellipse at 50% -10%, #1a1030 0%, #0a0812 60%, #05040a 100%);
+  --thumb-filter:saturate(1.25) contrast(1.05);
+}
+/* thick 'battle box' frame borders (base size now driven by --fsize) */
+[data-theme="undertale"] .frame { border-width:3px; }
+[data-theme="undertale"] .frame::before { letter-spacing:2px; }
+/* pixel-font themes: bump the small panel-title labels too */
+[data-theme="gameboy"] .frame::before,
+[data-theme="undertale"] .frame::before { font-size:14px; }
+/* red SOUL heart as the focus cursor -- straight out of the UT menu */
+[data-theme="undertale"] [data-focus]:focus { outline:none; box-shadow:none; position:relative; }
+[data-theme="undertale"] [data-focus]:focus::after {
+  content:"\2665"; position:absolute; left:-1.05em; top:50%; transform:translateY(-50%);
+  color:var(--warn); font-size:0.95em; pointer-events:none; -webkit-text-fill-color:var(--warn);
+}
 
 /* ============================== BASE ============================== */
 * { box-sizing: border-box; }
 html, body { height:100%; margin:0; padding:0; }
 body {
-  background: var(--bg);
+  background: var(--bg-grad, var(--bg));   /* themes may set a gradient; CRT falls back to solid */
   color: var(--pri);
-  font-family: "Courier New", ui-monospace, "Cascadia Mono", monospace;
-  font-size: 15px;
-  letter-spacing: 0.5px;
+  font-family: var(--font);
+  font-size: var(--fsize, 15px);   /* per-theme base size (pixel fonts render small) */
+  letter-spacing: var(--letter);
   overflow: hidden;
   user-select: none;
 }
 button, input, select {
   font-family: inherit; font-size: inherit; color: var(--pri); background: var(--bg);
-  border: 1px solid var(--line); padding: 6px 10px;
+  border: 1px solid var(--line); padding: 6px 10px; border-radius: var(--radius);
+  box-shadow: var(--btn-glow, none);
 }
 
 /* Square, amber, terminal-style scrollbars -- the OS default rounded grey
@@ -76,6 +173,7 @@ a { color: var(--pri); }
     repeating-linear-gradient(to bottom, rgba(0,0,0,0.28) 0, rgba(0,0,0,0.28) 1px, transparent 1px, transparent 3px),
     radial-gradient(ellipse at center, rgba(0,0,0,0) 55%, rgba(0,0,0,0.55) 100%);
   mix-blend-mode: multiply;
+  opacity: var(--scan);   /* CRT themes = 1 (full scanlines); anime = faint VHS */
 }
 
 @keyframes blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0.12; } }
@@ -86,7 +184,7 @@ a { color: var(--pri); }
 /* Frame panel w/ box-drawing title */
 .frame {
   border: 1px solid var(--line); position: relative; padding: 16px 12px 12px;
-  margin: 10px 0;
+  margin: 10px 0; border-radius: var(--radius); box-shadow: var(--panel-glow, none);
 }
 .frame::before {
   content: "\2500\2500 " attr(data-title) " ";
@@ -296,9 +394,9 @@ a { color: var(--pri); }
 #yt-results { flex:1; min-height:0; overflow-y:auto; display:grid;
   grid-template-columns:repeat(auto-fill, minmax(210px, 1fr)); grid-auto-rows:min-content;
   gap:10px; padding:12px; align-content:start; }
-.yt-card { display:flex; flex-direction:column; text-align:left; padding:0; background:transparent; border:1px solid var(--line); overflow:hidden; cursor:pointer; }
+.yt-card { display:flex; flex-direction:column; text-align:left; padding:0; background:transparent; border:1px solid var(--line); overflow:hidden; cursor:pointer; border-radius:var(--radius); }
 .yt-card:focus, .yt-card:hover { outline:2px solid var(--pri); }
-.yt-thumb { width:100%; aspect-ratio:16/9; object-fit:cover; background:#111; display:block; filter:sepia(0.5) hue-rotate(345deg) saturate(1.4) brightness(0.95); }
+.yt-thumb { width:100%; aspect-ratio:16/9; object-fit:cover; background:#111; display:block; filter:var(--thumb-filter); }
 .yt-dur { align-self:flex-end; margin:-22px 4px 0 0; padding:1px 5px; font-size:11px; background:rgba(0,0,0,0.75); color:var(--pri); position:relative; z-index:1; }
 /* auto top/bottom margins center the title+meta block in the card's leftover
  * space (rows stretch to the tallest card) so short titles sit centered under
@@ -673,9 +771,10 @@ const TAB_LABELS = {
 let CarplayInfo = null;
 function visibleTabs() { return TABS.filter(t => t !== "carplay" || CarplayInfo); }
 const THEMES = [
-  {id:"gost", name:"GOST AMBER"}, {id:"perimetr", name:"PERIMETR RED"},
-  {id:"fosfor", name:"FOSFOR GREEN"}, {id:"argon", name:"ARGON CYAN"},
-  {id:"kremlin", name:"KREMLIN WHITE"}, {id:"okhra", name:"OKHRA YELLOW"},
+  {id:"gost", name:"GOST AMBER"},
+  {id:"anime", name:"SAKURA DREAM"},
+  {id:"gameboy", name:"GAME BOY"},
+  {id:"undertale", name:"UNDERTALE"},
 ];
 const WEEKDAYS = ["sun","mon","tue","wed","thu","fri","sat"];
 
@@ -693,19 +792,26 @@ const LS = {
 /* ------------------------------- config ---------------------------------- */
 const Config = {
   data: Object.assign({
-    setup_done: false, source_mode: "AUTO", theme: "gost", guide3: {}, dashcam: false, channel_names: {}, brightness: 100,
+    setup_done: false, source_mode: "AUTO", theme: "gost", guide3: {}, dashcam: false, channel_names: {}, brightness: 100, gbc: false, dr: false,
   }, LS.get("config", {})),
   save() { LS.set("config", this.data); },
   set(key, value, fromRemote) {
     this.data[key] = value;
     this.save();
     if (!fromRemote && Net.connected) Net.send({ type: "config.set", key, value });
-    if (key === "theme") applyTheme(value);
+    if (key === "theme" || key === "gbc" || key === "dr") applyTheme(this.data.theme);
   },
 };
 
 function applyTheme(id) {
-  document.documentElement.setAttribute("data-theme", id);
+  const root = document.documentElement;
+  root.setAttribute("data-theme", id);
+  // per-theme sub-variants: [data-gbc] = Game Boy Color, [data-dr] = Deltarune
+  root.toggleAttribute("data-gbc", id === "gameboy" && !!Config.data.gbc);
+  root.toggleAttribute("data-dr", id === "undertale" && !!Config.data.dr);
+  // variant toggles only show on their own theme
+  const gt = $("#gb-toggle"); if (gt) gt.style.display = (id === "gameboy") ? "" : "none";
+  const dt = $("#dr-toggle"); if (dt) dt.style.display = (id === "undertale") ? "" : "none";
 }
 
 /* -------------------------------- utils ----------------------------------- */
@@ -3592,10 +3698,21 @@ function buildSettings() {
   THEMES.forEach(th => {
     const sw = el("button", { "data-focus": "", title: th.name, onclick: () => Config.set("theme", th.id) }, [""]);
     sw.classList.add("theme-swatch");
+    // Carry the theme on the swatch itself so var(--pri) resolves to THAT
+    // theme's color (previously all swatches showed the active theme's color).
+    sw.setAttribute("data-theme", th.id);
     sw.style.background = "var(--pri)";
-    sw.setAttribute("data-theme-preview", th.id);
     swatches.appendChild(sw);
   });
+  // Game Boy DMG <-> COLOR toggle (only shown while the gameboy theme is active)
+  const gbLabel = () => Config.data.gbc ? "[ GAME BOY COLOR → tap for DMG ]" : "[ DMG GREEN → tap for COLOR ]";
+  const gbToggle = el("button", { "data-focus": "", id: "gb-toggle", style: "margin-top:10px; display:" + (Config.data.theme === "gameboy" ? "" : "none") }, [gbLabel()]);
+  gbToggle.addEventListener("click", () => { Config.set("gbc", !Config.data.gbc); gbToggle.textContent = gbLabel(); });
+  swatches.parentElement.appendChild(gbToggle);
+  const drLabel = () => Config.data.dr ? "[ DELTARUNE → tap for UNDERTALE ]" : "[ UNDERTALE → tap for DELTARUNE ]";
+  const drToggle = el("button", { "data-focus": "", id: "dr-toggle", style: "margin-top:10px; display:" + (Config.data.theme === "undertale" ? "" : "none") }, [drLabel()]);
+  drToggle.addEventListener("click", () => { Config.set("dr", !Config.data.dr); drToggle.textContent = drLabel(); });
+  swatches.parentElement.appendChild(drToggle);
   $("#src-auto-btn").addEventListener("click", () => setSourceMode("AUTO"));
   $("#src-demo-btn").addEventListener("click", () => setSourceMode("DEMO"));
   const setVeh = (key, val) => {
