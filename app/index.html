@@ -435,6 +435,14 @@ a { color: var(--pri); }
  * the thumbnail instead of jammed against it. */
 .yt-title { margin-top:auto; padding:6px 8px 2px; font-size:13px; line-height:1.25; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
 .yt-meta { margin-bottom:auto; padding:0 8px 8px; font-size:11px; }
+/* ---- GAMES tab (RetroArch front-end) ---- */
+#games-list { flex:1; min-height:0; overflow-y:auto; margin-top:10px; display:grid;
+  grid-template-columns:repeat(auto-fill, minmax(160px, 1fr)); grid-auto-rows:min-content; gap:10px; align-content:start; }
+.game-card { text-align:left; padding:12px 10px; border:1px solid var(--line); background:transparent; cursor:pointer;
+  border-radius:var(--radius); color:var(--pri); }
+.game-card:focus, .game-card:hover { outline:2px solid var(--pri); box-shadow:0 0 10px var(--glow); }
+.game-sys { font-size:11px; letter-spacing:1px; color:var(--dim); }
+.game-name { font-size:14px; margin-top:5px; word-break:break-word; }
 #yt-player { position:fixed; inset:0; z-index:540; display:flex; flex-direction:column; background:#000; }
 #yt-player-bar { padding:8px 12px; border-bottom:1px solid var(--line); font-size:13px; display:flex; justify-content:space-between; gap:8px; background:var(--bg); }
 #yt-player-title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -591,6 +599,18 @@ a { color: var(--pri); }
             <div id="music-tracks"></div>
           </div>
           <div id="music-now-playing"></div>
+        </div>
+      </section>
+
+      <!-- GAMES = RetroArch emulator front-end. Scans a roms/ folder the user
+           fills themselves (USB/TERM); we bundle NO ROMs. BACK exits the game. -->
+      <section id="tab-games" class="tab">
+        <div class="frame" data-title="GAMES" style="height:calc(100% - 20px); display:flex; flex-direction:column;">
+          <div class="settings-row">
+            <button data-focus id="games-refresh-btn">[ RESCAN ROMS ]</button>
+            <span id="games-msg" class="dim" style="font-size:12px;"></span>
+          </div>
+          <div id="games-list"></div>
         </div>
       </section>
 
@@ -794,10 +814,10 @@ a { color: var(--pri); }
  * over ws://127.0.0.1:8765 + http://127.0.0.1:8766.
  * =========================================================================== */
 
-const TABS = ["home","drive","hud","vehicle","carplay","tv","music","nav","term","settings"];
+const TABS = ["home","drive","hud","vehicle","carplay","tv","music","games","nav","term","settings"];
 const TAB_LABELS = {
   home:"HOME", drive:"DRIVE", hud:"HUD", vehicle:"VEHICLE", carplay:"CARPLAY", tv:"TV",
-  guide:"GUIDE", music:"MUSIC", nav:"NAV", term:"TERM", settings:"SETTINGS",
+  guide:"GUIDE", music:"MUSIC", games:"GAMES", nav:"NAV", term:"TERM", settings:"SETTINGS",
 };
 // CARPLAY only exists while a Carlinkit dongle is plugged in (backend scans USB).
 let CarplayInfo = null;
@@ -1164,6 +1184,8 @@ const Net = {
     else if (msg.type === "youtube.more") { YT.onMore(msg); }
     else if (msg.type === "youtube.random") { YT.onRandom(msg); }
     else if (msg.type === "app.launch") { YT.onFullLaunch(msg); }
+    else if (msg.type === "games.list") { Games.onList(msg); }
+    else if (msg.type === "games.launch") { Games.onLaunch(msg); }
   },
   send(obj) { if (this.connected && this.ws) { try { this.ws.send(JSON.stringify(obj)); } catch (e) {} } },
 };
@@ -1637,6 +1659,7 @@ function setTab(name) {
   for (const t of TABS) $("#tab-" + t).classList.toggle("active", t === name);
   $all("#tabbar button").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
   if (name === "nav") Nav.activate();
+  if (name === "games") Games.activate();
   if (name === "settings") renderAbout(LastInfo.data);
   setTimeout(() => { const f = focusables()[0]; if (f) f.focus(); }, 0);
 }
@@ -1661,6 +1684,7 @@ function buildHome() {
     tv: "Broadcast-simulation channels 3-82 + YouTube",
     guide: "Program the station -- schedule blocks per weekday",
     music: "Music & podcasts -- keeps playing across all tabs",
+    games: "Retro game emulator -- RetroArch, bring your own ROMs",
     nav: "Offline MapLibre/PMTiles maps with GPS puck",
     term: "On-screen shell -- map downloads, tweaks, no SSH",
     settings: "Source, Wi-Fi, Bluetooth, units, themes, updates",
@@ -1671,6 +1695,47 @@ function buildHome() {
     ]));
   }
 }
+
+/* ============================================================================
+ * GAMES TAB -- RetroArch emulator front-end. We bundle NO ROMs; the backend
+ * scans a roms/ folder the user fills (USB/TERM) and launches RetroArch, which
+ * (like the app overlay) is killed by the universal BACK to return to the unit.
+ * ========================================================================== */
+const Games = {
+  activate() {
+    if (Net.connected) { $("#games-msg").textContent = "scanning ROMs..."; Net.send({ type: "games.list" }); }
+    else {
+      $("#games-list").innerHTML = "";
+      $("#games-msg").textContent = "Games run on the device (RetroArch). Drop ROMs in the roms/ folder and RESCAN.";
+    }
+  },
+  onList(msg) {
+    const box = $("#games-list"); box.innerHTML = "";
+    if (!msg.roms || !msg.roms.length) {
+      $("#games-msg").innerHTML = "No ROMs in <b>" + (msg.dir || "roms/") +
+        "</b> -- copy your own game files (.nes .gb .gbc .gba .sfc .md .n64 ...) there via USB or TERM, then RESCAN.";
+      return;
+    }
+    $("#games-msg").textContent = msg.roms.length + " game(s) -- powered by RetroArch (you supply your own ROMs).";
+    for (const g of msg.roms) {
+      box.appendChild(el("button", { class: "game-card", "data-focus": "", onclick: () => Games.launch(g) }, [
+        el("div", { class: "game-sys" }, [g.system || ""]),
+        el("div", { class: "game-name" }, [g.name || g.path]),
+      ]));
+    }
+  },
+  launch(g) {
+    if (!Net.connected) { $("#games-msg").textContent = "no device backend -- can't launch"; return; }
+    $("#games-msg").textContent = "launching " + (g.name || "game") + " ...";
+    Net.send({ type: "games.launch", path: g.path });
+  },
+  onLaunch(msg) {
+    $("#games-msg").textContent = msg.ok
+      ? "launched -- press BACK on the unit to return to the head unit"
+      : "couldn't launch (RetroArch or the core may be missing on this device)";
+  },
+};
+$("#games-refresh-btn") && $("#games-refresh-btn").addEventListener("click", () => Games.activate());
 
 /* ============================================================================
  * DRIVE TAB

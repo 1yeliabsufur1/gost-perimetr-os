@@ -7,3 +7,7 @@ dist/
 
 # downloaded python-obd source (already baked into the venv; not shipped)
 obd-0.7.3/
+
+# user-supplied game ROMs -- never commit these (legal); keep only the readme
+roms/*
+!roms/README.txt
