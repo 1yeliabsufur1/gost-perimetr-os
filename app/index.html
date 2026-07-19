@@ -103,6 +103,36 @@
 /* pixel-font themes: bump the small panel-title labels too */
 [data-theme="gameboy"] .frame::before,
 [data-theme="undertale"] .frame::before { font-size:14px; }
+/* ---------- CYBERPUNK 2077 (acid yellow + cyan glitch on black, angular) ---------- */
+@font-face { font-family:"Rajdhani"; src:url("vendor/rajdhani.woff2") format("woff2"); font-weight:500 700; font-display:swap; }
+[data-theme="cyberpunk"] {
+  --pri:#f5e400; --dim:#8a922e; --bg:#080a0d; --warn:#ff2b5e; --glow:#00e5ff; --line:#00e5ff;
+  --font:"Rajdhani","Segoe UI",sans-serif; --display:"Rajdhani",sans-serif;
+  --scan:0.4; --radius:0px; --letter:0.5px; --fsize:18px;
+  --bg-grad:linear-gradient(135deg,#0b0e12 0%,#0e0a14 100%);
+  --thumb-filter:contrast(1.16) saturate(1.35) brightness(1.03);
+}
+/* chromatic-aberration glitch on headers/accents (red/cyan channel split) */
+[data-theme="cyberpunk"] .yt-brand,
+[data-theme="cyberpunk"] #clock,
+[data-theme="cyberpunk"] .glow,
+[data-theme="cyberpunk"] .frame::before { text-shadow:1.5px 0 var(--warn), -1.5px 0 var(--glow); }
+/* sharp cyan accent bar down the left of tech panels */
+[data-theme="cyberpunk"] .frame { border-left:3px solid var(--glow); }
+/* ---------- MINECRAFT (dirt + grass, blocky pixel font, pixelated thumbnails) ---------- */
+@font-face { font-family:"Silkscreen"; src:url("vendor/silkscreen.woff2") format("woff2"); font-weight:400 700; font-display:swap; }
+[data-theme="minecraft"] {
+  --pri:#f4f4f4; --dim:#b0a082; --bg:#3a2a1a; --warn:#d84a3f; --glow:#6cbb3c; --line:#6b4f34;
+  --font:"Silkscreen","Courier New",monospace; --display:"Silkscreen",monospace;
+  --scan:0; --radius:0px; --letter:0.5px; --fsize:16px;
+  --bg-grad:linear-gradient(180deg,#4a3623 0%,#312218 100%);
+  --thumb-filter:saturate(1.1) contrast(1.05);
+}
+/* grass-block accent: thick green top border on dirt-brown panels + green titles */
+[data-theme="minecraft"] .frame { border-width:2px; border-top:4px solid #6cbb3c; }
+[data-theme="minecraft"] .frame::before { color:#6cbb3c; font-size:13px; }
+/* blocky pixelated thumbnails -- pure Minecraft */
+[data-theme="minecraft"] .yt-thumb { image-rendering:pixelated; }
 /* red SOUL heart as the focus cursor -- straight out of the UT menu */
 [data-theme="undertale"] [data-focus]:focus { outline:none; box-shadow:none; position:relative; }
 [data-theme="undertale"] [data-focus]:focus::after {
@@ -775,6 +805,8 @@ const THEMES = [
   {id:"anime", name:"SAKURA DREAM"},
   {id:"gameboy", name:"GAME BOY"},
   {id:"undertale", name:"UNDERTALE"},
+  {id:"cyberpunk", name:"CYBERPUNK 2077"},
+  {id:"minecraft", name:"MINECRAFT"},
 ];
 const WEEKDAYS = ["sun","mon","tue","wed","thu","fri","sat"];
 
