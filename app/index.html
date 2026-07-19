@@ -133,6 +133,8 @@
 [data-theme="minecraft"] .frame::before { color:#6cbb3c; font-size:13px; }
 /* blocky pixelated thumbnails -- pure Minecraft */
 [data-theme="minecraft"] .yt-thumb { image-rendering:pixelated; }
+/* GB DMG has dark-green text, but the duration chip is dark -> use light green so it's legible */
+[data-theme="gameboy"]:not([data-gbc]) .yt-dur { color:#9bbc0f; }
 /* red SOUL heart as the focus cursor -- straight out of the UT menu */
 [data-theme="undertale"] [data-focus]:focus { outline:none; box-shadow:none; position:relative; }
 [data-theme="undertale"] [data-focus]:focus::after {
