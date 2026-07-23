@@ -1823,6 +1823,8 @@ const Games = {
     if (!core) { $("#games-msg").textContent = "unsupported ROM type: " + ext; return; }
     this.launchEJS(core, URL.createObjectURL(file), file.name.replace(/\.[^.]+$/, ""));
   },
+  // cores bundled offline in app/vendor; everything else streams from the CDN
+  BUNDLED_CORES: new Set(["gb", "gba", "nes", "snes", "segaMD"]),
   launchEJS(core, url, name) {
     this.stopEJS();
     $("#ejs-host").innerHTML = '<div id="ejs"></div>';
@@ -1830,10 +1832,11 @@ const Games = {
     window.EJS_core = core;
     window.EJS_gameUrl = url;
     window.EJS_gameName = name;
-    // CDN for now (works online); TODO self-host into app/vendor for full offline
-    window.EJS_pathtodata = "https://cdn.emulatorjs.org/stable/data/";
+    // bundled systems play fully offline; rarer ones fall back to the CDN (online)
+    window.EJS_pathtodata = this.BUNDLED_CORES.has(core) ? "vendor/emulatorjs/data/" : "https://cdn.emulatorjs.org/stable/data/";
     window.EJS_startOnLoaded = true;
     window.EJS_threads = false;
+    window.EJS_disableAutoLang = false;   // skip the localization fetch (English UI)
     try { window.EJS_color = getComputedStyle(document.documentElement).getPropertyValue("--pri").trim() || "#ffb000"; } catch (e) {}
     $("#ejs-title").textContent = name || "";
     $("#ejs-overlay").classList.remove("hidden");
