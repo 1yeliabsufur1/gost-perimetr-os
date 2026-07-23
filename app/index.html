@@ -135,6 +135,24 @@
 [data-theme="minecraft"] .yt-thumb { image-rendering:pixelated; }
 /* GB DMG has dark-green text, but the duration chip is dark -> use light green so it's legible */
 [data-theme="gameboy"]:not([data-gbc]) .yt-dur { color:#9bbc0f; }
+/* ---------- THE BACKROOMS (liminal mono-yellow, wallpaper grid, fluorescent buzz) ---------- */
+[data-theme="backrooms"] {
+  --pri:#2a2410; --dim:#6b5e2a; --bg:#b3a54a; --warn:#8a2e12; --glow:#efe08a; --line:#7c6f28;
+  --font:"Segoe UI","Trebuchet MS",system-ui,sans-serif; --display:"Segoe UI",sans-serif;
+  --scan:0; --radius:0px; --letter:0.4px; --fsize:15px;
+  --bg-grad:linear-gradient(165deg,#bcaa4e 0%,#a89840 55%,#9b8b34 100%);
+  --thumb-filter:sepia(0.45) saturate(0.8) brightness(1.02) contrast(0.95);
+}
+/* damp-wallpaper / ceiling-tile grid behind the UI */
+[data-theme="backrooms"] body::after {
+  content:""; position:fixed; inset:0; z-index:-1; pointer-events:none;
+  background-image:
+    repeating-linear-gradient(0deg, rgba(60,50,10,0.10) 0 1px, transparent 1px 46px),
+    repeating-linear-gradient(90deg, rgba(60,50,10,0.10) 0 1px, transparent 1px 46px);
+}
+/* the fluorescent hum -- mostly steady with brief buzzy flickers */
+[data-theme="backrooms"] body { animation:buzz 6s steps(1) infinite; }
+@keyframes buzz { 0%,96%,100%{filter:none} 97%{filter:brightness(1.16)} 98%{filter:brightness(0.88)} 99%{filter:brightness(1.08)} }
 /* red SOUL heart as the focus cursor -- straight out of the UT menu */
 [data-theme="undertale"] [data-focus]:focus { outline:none; box-shadow:none; position:relative; }
 [data-theme="undertale"] [data-focus]:focus::after {
@@ -403,7 +421,25 @@ a { color: var(--pri); }
 }
 
 /* ---- SETTINGS ---- */
-.theme-swatch { display:inline-block; width:26px; height:26px; border:2px solid var(--line); margin-right:8px; cursor:pointer; vertical-align:middle; }
+.theme-swatch { display:inline-block; width:28px; height:28px; border:2px solid var(--line); margin-right:8px; cursor:pointer; vertical-align:middle; position:relative; overflow:hidden; }
+/* each swatch is a tiny picture of its theme */
+.theme-swatch[data-theme="gost"]      { background:#ffb000; }
+.theme-swatch[data-theme="anime"]     { background:radial-gradient(circle at 34% 30%, #ffd6ee, #ff8fd0 72%); }
+.theme-swatch[data-theme="gameboy"]   { background:#0f380f; }
+.theme-swatch[data-theme="gameboy"]::after { content:""; position:absolute; inset:5px 5px 8px; background:#9bbc0f; }
+.theme-swatch[data-theme="undertale"] { background:#000; }
+.theme-swatch[data-theme="undertale"]::after { content:"\2665"; position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:#ff2b2b; font-size:15px; }
+.theme-swatch[data-theme="cyberpunk"] { background:linear-gradient(135deg, #f5e400 0 52%, #00e5ff 52% 100%); }
+.theme-swatch[data-theme="minecraft"] { background:linear-gradient(#7bc043 0 32%, #7a5334 32% 100%); image-rendering:pixelated; }
+.theme-swatch[data-theme="minecraft"]::after { content:""; position:absolute; inset:0;
+  background:radial-gradient(circle at 22% 60%, rgba(0,0,0,0.28) 1.5px, transparent 2px),
+             radial-gradient(circle at 68% 78%, rgba(0,0,0,0.22) 1.5px, transparent 2px),
+             radial-gradient(circle at 82% 52%, rgba(255,255,255,0.16) 1.5px, transparent 2px),
+             radial-gradient(circle at 45% 85%, rgba(0,0,0,0.2) 1.5px, transparent 2px); }
+.theme-swatch[data-theme="backrooms"] { background:#b3a54a; }
+.theme-swatch[data-theme="backrooms"]::after { content:""; position:absolute; inset:0;
+  background:repeating-linear-gradient(0deg, rgba(0,0,0,0.14) 0 1px, transparent 1px 8px),
+             repeating-linear-gradient(90deg, rgba(0,0,0,0.14) 0 1px, transparent 1px 8px); }
 .settings-row { margin: 12px 0; }
 
 /* ---- Overlay browser ---- */
@@ -846,6 +882,7 @@ const THEMES = [
   {id:"undertale", name:"UNDERTALE"},
   {id:"cyberpunk", name:"CYBERPUNK 2077"},
   {id:"minecraft", name:"MINECRAFT"},
+  {id:"backrooms", name:"THE BACKROOMS"},
 ];
 const WEEKDAYS = ["sun","mon","tue","wed","thu","fri","sat"];
 
@@ -3884,10 +3921,9 @@ function buildSettings() {
   THEMES.forEach(th => {
     const sw = el("button", { "data-focus": "", title: th.name, onclick: () => Config.set("theme", th.id) }, [""]);
     sw.classList.add("theme-swatch");
-    // Carry the theme on the swatch itself so var(--pri) resolves to THAT
-    // theme's color (previously all swatches showed the active theme's color).
+    // Carry the theme on the swatch so both its shape (--radius) and its themed
+    // CSS picture (.theme-swatch[data-theme=...]) resolve to THAT theme.
     sw.setAttribute("data-theme", th.id);
-    sw.style.background = "var(--pri)";
     swatches.appendChild(sw);
   });
   // Game Boy DMG <-> COLOR toggle (only shown while the gameboy theme is active)
