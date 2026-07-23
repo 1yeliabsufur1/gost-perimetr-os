@@ -1988,8 +1988,10 @@ function renderHud(t) {
   if (modeEl) {
     if (d.drive_mode && (vtype === "hybrid" || vtype === "ev")) {
       const onBattery = d.drive_mode === "EV" || d.drive_mode === "IDLE-EV";
-      modeEl.textContent = onBattery ? "⚡ BATTERY" : "⛽ ENGINE";
-      modeEl.style.color = onBattery ? "var(--ok, #4fe38a)" : "";
+      // Plain text + theme colours (no colour-emoji that clashes with the theme).
+      // "ϟ" is a text glyph (not emoji) so it inherits the theme colour.
+      modeEl.textContent = onBattery ? "ϟ BATTERY" : "ENGINE";
+      modeEl.style.color = onBattery ? "var(--glow)" : "var(--warn)";
     } else {
       modeEl.textContent = "";
     }
