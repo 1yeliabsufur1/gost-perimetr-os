@@ -443,6 +443,12 @@ a { color: var(--pri); }
 .game-card:focus, .game-card:hover { outline:2px solid var(--pri); box-shadow:0 0 10px var(--glow); }
 .game-sys { font-size:11px; letter-spacing:1px; color:var(--dim); }
 .game-name { font-size:14px; margin-top:5px; word-break:break-word; }
+/* in-browser EmulatorJS player overlay */
+#ejs-overlay { position:fixed; inset:0; z-index:560; display:flex; flex-direction:column; background:#000; }
+#ejs-bar { padding:8px 12px; border-bottom:1px solid var(--line); font-size:13px; display:flex; justify-content:space-between; gap:8px; background:var(--bg); }
+#ejs-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#ejs-host { flex:1; min-height:0; }
+#ejs-host > div, #ejs-host #ejs { width:100%; height:100%; }
 #yt-player { position:fixed; inset:0; z-index:540; display:flex; flex-direction:column; background:#000; }
 #yt-player-bar { padding:8px 12px; border-bottom:1px solid var(--line); font-size:13px; display:flex; justify-content:space-between; gap:8px; background:var(--bg); }
 #yt-player-title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -607,9 +613,12 @@ a { color: var(--pri); }
       <section id="tab-games" class="tab">
         <div class="frame" data-title="GAMES" style="height:calc(100% - 20px); display:flex; flex-direction:column;">
           <div class="settings-row">
+            <button data-focus id="games-file-btn">[ LOAD ROM FILE ]</button>
             <button data-focus id="games-import-btn">[ IMPORT FROM USB ]</button>
             <button data-focus id="games-refresh-btn">[ RESCAN ROMS ]</button>
             <span id="games-msg" class="dim" style="font-size:12px;"></span>
+            <input type="file" id="games-file-input" style="display:none;"
+                   accept=".nes,.fds,.sfc,.smc,.gb,.gbc,.gba,.n64,.z64,.v64,.nds,.md,.gen,.smd,.sms,.gg,.32x,.pce,.ngp,.ws,.wsc,.a26,.a78,.lnx,.j64,.col,.d64,.zip,.iso,.cue,.bin,.chd,.pbp">
           </div>
           <div id="games-list"></div>
         </div>
@@ -800,6 +809,13 @@ a { color: var(--pri); }
       <button data-focus id="yt-player-close-btn">[ BACK TO RESULTS ]</button>
     </div>
     <iframe id="yt-player-frame" allow="autoplay; encrypted-media; fullscreen" allowfullscreen></iframe>
+  </div>
+
+  <!-- In-browser emulator (EmulatorJS) -- games play right here, no native
+       RetroArch needed. BACK / EXIT GAME returns to the head unit. -->
+  <div id="ejs-overlay" class="hidden">
+    <div id="ejs-bar"><span id="ejs-title"></span><button id="ejs-close">[ EXIT GAME ]</button></div>
+    <div id="ejs-host"></div>
   </div>
 
   <audio id="global-audio"></audio>
@@ -1434,6 +1450,7 @@ function handleAction(action) {
 
 function universalBack() {
   if (Modal.isOpen()) { Modal.close(); return; }
+  if (Games.ejsOpen()) { Games.stopEJS(); return; }    // exit the emulator -> head unit
   if (Overlay.isOpen()) { Overlay.close(); return; }
   if (YT.playerOpen()) { YT.stopPlayer(); return; }   // player -> back to results
   if (YT.isOpen()) { YT.close(); TV.exit(); return; }  // results -> back to TV
@@ -1735,11 +1752,66 @@ const Games = {
     // backend pushes a fresh games.list right after, so the grid refreshes itself
     $("#games-msg").textContent = msg.detail || (msg.ok ? "imported" : "no USB drive found");
   },
-  launch(g) {
-    if (!Net.connected) { $("#games-msg").textContent = "no device backend -- can't launch"; return; }
-    $("#games-msg").textContent = "launching " + (g.name || "game") + " ...";
-    Net.send({ type: "games.launch", path: g.path });
+  // EmulatorJS system aliases, keyed by our backend system label and by extension
+  EJS_BY_SYSTEM: {
+    "NES": "nes", "FAMICOM DISK": "nes", "SUPER NES": "snes", "SUPER GAME BOY": "snes",
+    "GAME BOY": "gb", "GAME BOY COLOR": "gb", "GAME BOY ADVANCE": "gba", "NINTENDO 64": "n64", "NINTENDO DS": "nds",
+    "VIRTUAL BOY": "vb", "SEGA GENESIS": "segaMD", "MASTER SYSTEM": "segaMS", "GAME GEAR": "segaGG",
+    "SEGA 32X": "sega32x", "SEGA CD": "segaCD", "SEGA SATURN": "segaSaturn", "PLAYSTATION": "psx",
+    "PC ENGINE": "pce", "SUPERGRAFX": "pce", "NEO GEO POCKET": "ngp", "WONDERSWAN": "ws", "WONDERSWAN COLOR": "ws",
+    "ATARI 2600": "atari2600", "ATARI 7800": "atari7800", "ATARI LYNX": "lynx", "ATARI JAGUAR": "jaguar",
+    "COLECOVISION": "coleco", "COMMODORE 64": "vice_x64", "ARCADE": "arcade", "NEO GEO": "arcade", "3DO": "3do",
   },
+  EJS_BY_EXT: {
+    ".nes": "nes", ".fds": "nes", ".sfc": "snes", ".smc": "snes", ".gb": "gb", ".gbc": "gb", ".gba": "gba",
+    ".n64": "n64", ".z64": "n64", ".v64": "n64", ".nds": "nds", ".vb": "vb", ".md": "segaMD", ".gen": "segaMD",
+    ".smd": "segaMD", ".sms": "segaMS", ".gg": "segaGG", ".32x": "sega32x", ".pce": "pce", ".ngp": "ngp", ".ngc": "ngp",
+    ".ws": "ws", ".wsc": "ws", ".a26": "atari2600", ".a78": "atari7800", ".lnx": "lynx", ".j64": "jaguar",
+    ".col": "coleco", ".d64": "vice_x64", ".zip": "arcade", ".iso": "psx", ".cue": "psx", ".bin": "psx", ".chd": "psx", ".pbp": "psx",
+  },
+  // Play a device ROM (from the backend list) in the in-browser emulator
+  launch(g) {
+    const ext = "." + (g.path || g.name || "").split(".").pop().toLowerCase();
+    const core = this.EJS_BY_SYSTEM[g.system] || this.EJS_BY_EXT[ext];
+    if (!core) { $("#games-msg").textContent = "no in-browser core for " + (g.system || ext); return; }
+    const base = "http://" + (location.hostname || "127.0.0.1") + ":8766";
+    this.launchEJS(core, base + (g.url || ""), g.name || "game");
+  },
+  // Play a ROM the user picks from their local files (no backend needed)
+  pickFile() { $("#games-file-input").click(); },
+  playFile(file) {
+    if (!file) return;
+    const ext = "." + file.name.split(".").pop().toLowerCase();
+    const core = this.EJS_BY_EXT[ext];
+    if (!core) { $("#games-msg").textContent = "unsupported ROM type: " + ext; return; }
+    this.launchEJS(core, URL.createObjectURL(file), file.name.replace(/\.[^.]+$/, ""));
+  },
+  launchEJS(core, url, name) {
+    this.stopEJS();
+    $("#ejs-host").innerHTML = '<div id="ejs"></div>';
+    window.EJS_player = "#ejs";
+    window.EJS_core = core;
+    window.EJS_gameUrl = url;
+    window.EJS_gameName = name;
+    // CDN for now (works online); TODO self-host into app/vendor for full offline
+    window.EJS_pathtodata = "https://cdn.emulatorjs.org/stable/data/";
+    window.EJS_startOnLoaded = true;
+    window.EJS_threads = false;
+    try { window.EJS_color = getComputedStyle(document.documentElement).getPropertyValue("--pri").trim() || "#ffb000"; } catch (e) {}
+    $("#ejs-title").textContent = name || "";
+    $("#ejs-overlay").classList.remove("hidden");
+    const old = document.getElementById("ejs-loader"); if (old) old.remove();
+    const s = document.createElement("script"); s.id = "ejs-loader"; s.src = window.EJS_pathtodata + "loader.js";
+    document.body.appendChild(s);
+  },
+  stopEJS() {
+    try { if (window.EJS_emulator && window.EJS_emulator.pause) window.EJS_emulator.pause(); } catch (e) {}
+    try { if (window.EJS_emulator && window.EJS_emulator.elements && window.EJS_emulator.elements.parent) window.EJS_emulator.elements.parent.remove(); } catch (e) {}
+    window.EJS_emulator = null;
+    const host = $("#ejs-host"); if (host) host.innerHTML = "";
+    $("#ejs-overlay").classList.add("hidden");
+  },
+  ejsOpen() { return !$("#ejs-overlay").classList.contains("hidden"); },
   onLaunch(msg) {
     $("#games-msg").textContent = msg.ok
       ? "launched -- press BACK on the unit to return to the head unit"
@@ -1748,6 +1820,9 @@ const Games = {
 };
 $("#games-refresh-btn") && $("#games-refresh-btn").addEventListener("click", () => Games.activate());
 $("#games-import-btn") && $("#games-import-btn").addEventListener("click", () => Games.importUsb());
+$("#games-file-btn") && $("#games-file-btn").addEventListener("click", () => Games.pickFile());
+$("#games-file-input") && $("#games-file-input").addEventListener("change", (e) => { if (e.target.files[0]) Games.playFile(e.target.files[0]); e.target.value = ""; });
+$("#ejs-close") && $("#ejs-close").addEventListener("click", () => Games.stopEJS());
 
 /* ============================================================================
  * DRIVE TAB

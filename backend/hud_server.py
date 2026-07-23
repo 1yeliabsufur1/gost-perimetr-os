@@ -18,7 +18,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import unquote, urlsplit, urlencode
+from urllib.parse import unquote, urlsplit, urlencode, quote
 import urllib.request
 
 try:
@@ -2659,7 +2659,8 @@ def games_list():
             meta = _system_for(p)
             if not meta:
                 continue
-            roms.append({"path": str(p), "name": p.stem, "system": meta[0], "core": meta[1]})
+            url = "/roms/" + quote(p.relative_to(ROMS_DIR).as_posix())
+            roms.append({"path": str(p), "url": url, "name": p.stem, "system": meta[0], "core": meta[1]})
             if len(roms) >= 1000:
                 break
     except Exception as e:
@@ -2920,6 +2921,8 @@ def resolve_fs_path(url_path: str):
         base, rel = MEDIA_DIR, clean[len("/media/"):]
     elif clean.startswith("/maps/"):
         base, rel = MAPS_DIR, clean[len("/maps/"):]
+    elif clean.startswith("/roms/"):
+        base, rel = ROMS_DIR, clean[len("/roms/"):]   # served to the in-browser emulator
     else:
         base, rel = APP_DIR, clean.lstrip("/")
     target = (base / rel).resolve()
@@ -2974,6 +2977,7 @@ async def serve_file(writer, url_path, headers, method):
     header_lines = [
         f"HTTP/1.1 {status}", f"Content-Type: {mime}", f"Content-Length: {length}",
         "Accept-Ranges: bytes", "Connection: close",
+        "Access-Control-Allow-Origin: *",   # lets the in-browser emulator fetch /roms cross-origin (dev)
     ]
     if status.startswith("206"):
         header_lines.append(f"Content-Range: bytes {start}-{end}/{size}")
