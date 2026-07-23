@@ -607,6 +607,7 @@ a { color: var(--pri); }
       <section id="tab-games" class="tab">
         <div class="frame" data-title="GAMES" style="height:calc(100% - 20px); display:flex; flex-direction:column;">
           <div class="settings-row">
+            <button data-focus id="games-import-btn">[ IMPORT FROM USB ]</button>
             <button data-focus id="games-refresh-btn">[ RESCAN ROMS ]</button>
             <span id="games-msg" class="dim" style="font-size:12px;"></span>
           </div>
@@ -1186,6 +1187,7 @@ const Net = {
     else if (msg.type === "app.launch") { YT.onFullLaunch(msg); }
     else if (msg.type === "games.list") { Games.onList(msg); }
     else if (msg.type === "games.launch") { Games.onLaunch(msg); }
+    else if (msg.type === "games.import") { Games.onImport(msg); }
   },
   send(obj) { if (this.connected && this.ws) { try { this.ws.send(JSON.stringify(obj)); } catch (e) {} } },
 };
@@ -1724,6 +1726,15 @@ const Games = {
       ]));
     }
   },
+  importUsb() {
+    if (!Net.connected) { $("#games-msg").textContent = "USB import runs on the device"; return; }
+    $("#games-msg").textContent = "scanning USB drives for ROMs...";
+    Net.send({ type: "games.import" });
+  },
+  onImport(msg) {
+    // backend pushes a fresh games.list right after, so the grid refreshes itself
+    $("#games-msg").textContent = msg.detail || (msg.ok ? "imported" : "no USB drive found");
+  },
   launch(g) {
     if (!Net.connected) { $("#games-msg").textContent = "no device backend -- can't launch"; return; }
     $("#games-msg").textContent = "launching " + (g.name || "game") + " ...";
@@ -1736,6 +1747,7 @@ const Games = {
   },
 };
 $("#games-refresh-btn") && $("#games-refresh-btn").addEventListener("click", () => Games.activate());
+$("#games-import-btn") && $("#games-import-btn").addEventListener("click", () => Games.importUsb());
 
 /* ============================================================================
  * DRIVE TAB

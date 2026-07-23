@@ -2392,7 +2392,7 @@ class GostState:
             log("retroarch not installed, cannot launch game"); return False
         await self.kill_apps()
         args = [ra, "--fullscreen"]
-        meta = _ROM_CORES.get(Path(path).suffix.lower())
+        meta = _system_for(path)
         if meta:
             core = _find_core(meta[1])
             if core:
@@ -2587,22 +2587,67 @@ async def youtube_more(token):
 # -------------------------------------------------------------- games/emu ----
 # RetroArch front-end. We ship NO ROMs (legal); the user drops their own game
 # files in ROMS_DIR (via USB/TERM) and we map extension -> libretro core.
+# Unambiguous extension -> (system label, libretro core). Ambiguous disc formats
+# (.iso/.cue/.chd...) are resolved by SYSTEM FOLDER instead (RetroPie convention).
 _ROM_CORES = {
-    ".nes": ("NES", "fceumm"), ".fds": ("FAMICOM", "fceumm"),
-    ".sfc": ("SNES", "snes9x"), ".smc": ("SNES", "snes9x"),
-    ".gb": ("GAME BOY", "gambatte"), ".gbc": ("GAME BOY COLOR", "gambatte"),
-    ".gba": ("GAME BOY ADVANCE", "mgba"),
-    ".md": ("GENESIS", "genesis_plus_gx"), ".gen": ("GENESIS", "genesis_plus_gx"),
-    ".smd": ("GENESIS", "genesis_plus_gx"), ".sms": ("MASTER SYSTEM", "genesis_plus_gx"),
-    ".gg": ("GAME GEAR", "genesis_plus_gx"),
-    ".n64": ("NINTENDO 64", "mupen64plus_next"), ".z64": ("NINTENDO 64", "mupen64plus_next"),
-    ".v64": ("NINTENDO 64", "mupen64plus_next"),
-    ".pce": ("PC ENGINE", "mednafen_pce_fast"), ".a26": ("ATARI 2600", "stella"),
-    ".cue": ("PLAYSTATION", "pcsx_rearmed"), ".chd": ("PLAYSTATION", "pcsx_rearmed"),
-    ".zip": ("ARCADE", "fbneo"),
+    ".nes": ("NES", "fceumm"), ".fds": ("FAMICOM DISK", "fceumm"), ".unf": ("NES", "fceumm"),
+    ".sfc": ("SUPER NES", "snes9x"), ".smc": ("SUPER NES", "snes9x"),
+    ".gb": ("GAME BOY", "gambatte"), ".gbc": ("GAME BOY COLOR", "gambatte"), ".sgb": ("SUPER GAME BOY", "gambatte"),
+    ".gba": ("GAME BOY ADVANCE", "mgba"), ".nds": ("NINTENDO DS", "desmume"), ".vb": ("VIRTUAL BOY", "mednafen_vb"),
+    ".n64": ("NINTENDO 64", "mupen64plus_next"), ".z64": ("NINTENDO 64", "mupen64plus_next"), ".v64": ("NINTENDO 64", "mupen64plus_next"),
+    ".md": ("SEGA GENESIS", "genesis_plus_gx"), ".gen": ("SEGA GENESIS", "genesis_plus_gx"),
+    ".smd": ("SEGA GENESIS", "genesis_plus_gx"), ".sms": ("MASTER SYSTEM", "genesis_plus_gx"),
+    ".gg": ("GAME GEAR", "genesis_plus_gx"), ".32x": ("SEGA 32X", "picodrive"),
+    ".pce": ("PC ENGINE", "mednafen_pce_fast"), ".sgx": ("SUPERGRAFX", "mednafen_pce_fast"),
+    ".ngp": ("NEO GEO POCKET", "mednafen_ngp"), ".ngc": ("NEO GEO POCKET", "mednafen_ngp"),
+    ".ws": ("WONDERSWAN", "mednafen_wswan"), ".wsc": ("WONDERSWAN COLOR", "mednafen_wswan"),
+    ".a26": ("ATARI 2600", "stella"), ".a78": ("ATARI 7800", "prosystem"),
+    ".lnx": ("ATARI LYNX", "handy"), ".j64": ("ATARI JAGUAR", "virtualjaguar"),
+    ".col": ("COLECOVISION", "bluemsx"), ".int": ("INTELLIVISION", "freeintv"),
+    ".d64": ("COMMODORE 64", "vice_x64"), ".t64": ("COMMODORE 64", "vice_x64"), ".adf": ("AMIGA", "puae"),
+    ".pbp": ("PLAYSTATION", "pcsx_rearmed"), ".gdi": ("DREAMCAST", "flycast"), ".cdi": ("DREAMCAST", "flycast"),
+    ".iso": ("PSP", "ppsspp"), ".cso": ("PSP", "ppsspp"), ".zip": ("ARCADE", "fbneo"), ".7z": ("ARCADE", "fbneo"),
 }
+# Drop ROMs in roms/<system>/ and the FOLDER decides the console (needed for
+# shared extensions: a .cue in roms/psx/ = PlayStation, in roms/segacd/ = Sega CD).
+_SYSTEM_FOLDERS = {
+    "nes": ("NES", "fceumm"), "snes": ("SUPER NES", "snes9x"), "sfc": ("SUPER NES", "snes9x"),
+    "gb": ("GAME BOY", "gambatte"), "gbc": ("GAME BOY COLOR", "gambatte"), "gba": ("GAME BOY ADVANCE", "mgba"),
+    "n64": ("NINTENDO 64", "mupen64plus_next"), "nds": ("NINTENDO DS", "desmume"),
+    "gc": ("GAMECUBE", "dolphin"), "gamecube": ("GAMECUBE", "dolphin"), "wii": ("WII", "dolphin"),
+    "genesis": ("SEGA GENESIS", "genesis_plus_gx"), "megadrive": ("SEGA GENESIS", "genesis_plus_gx"),
+    "sms": ("MASTER SYSTEM", "genesis_plus_gx"), "mastersystem": ("MASTER SYSTEM", "genesis_plus_gx"),
+    "gamegear": ("GAME GEAR", "genesis_plus_gx"), "gg": ("GAME GEAR", "genesis_plus_gx"),
+    "segacd": ("SEGA CD", "genesis_plus_gx"), "sega32x": ("SEGA 32X", "picodrive"), "32x": ("SEGA 32X", "picodrive"),
+    "saturn": ("SEGA SATURN", "mednafen_saturn"), "dreamcast": ("DREAMCAST", "flycast"), "dc": ("DREAMCAST", "flycast"),
+    "psx": ("PLAYSTATION", "pcsx_rearmed"), "ps1": ("PLAYSTATION", "pcsx_rearmed"), "playstation": ("PLAYSTATION", "pcsx_rearmed"),
+    "psp": ("PSP", "ppsspp"), "ps2": ("PLAYSTATION 2", "pcsx2"),
+    "pcengine": ("PC ENGINE", "mednafen_pce_fast"), "tg16": ("TURBOGRAFX-16", "mednafen_pce_fast"),
+    "neogeo": ("NEO GEO", "fbneo"), "arcade": ("ARCADE", "fbneo"), "mame": ("ARCADE", "mame2003_plus"), "fbneo": ("ARCADE", "fbneo"),
+    "atari2600": ("ATARI 2600", "stella"), "atari7800": ("ATARI 7800", "prosystem"),
+    "lynx": ("ATARI LYNX", "handy"), "jaguar": ("ATARI JAGUAR", "virtualjaguar"),
+    "wonderswan": ("WONDERSWAN", "mednafen_wswan"), "ngp": ("NEO GEO POCKET", "mednafen_ngp"),
+    "c64": ("COMMODORE 64", "vice_x64"), "amiga": ("AMIGA", "puae"), "msx": ("MSX", "bluemsx"),
+    "dos": ("MS-DOS", "dosbox_pure"), "colecovision": ("COLECOVISION", "bluemsx"),
+    "intellivision": ("INTELLIVISION", "freeintv"), "3do": ("3DO", "opera"), "virtualboy": ("VIRTUAL BOY", "mednafen_vb"),
+}
+# disc/image extensions that only make sense once a system folder disambiguates them
+_DISC_EXTS = {".iso", ".cue", ".bin", ".chd", ".cso", ".pbp", ".gdi", ".cdi", ".m3u", ".img", ".rom"}
+_PLAYABLE_EXTS = set(_ROM_CORES) | _DISC_EXTS
 _CORE_DIRS = ("/usr/lib/libretro", "/usr/lib/aarch64-linux-gnu/libretro",
               "/usr/local/lib/libretro", "/usr/lib/arm-linux-gnueabihf/libretro")
+
+
+def _system_for(path):
+    """(system, core) for a ROM: folder wins (disambiguates disc formats), else extension."""
+    p = Path(path)
+    if p.suffix.lower() not in _PLAYABLE_EXTS:
+        return None
+    for part in p.parts[:-1]:                      # any parent folder named after a system
+        m = _SYSTEM_FOLDERS.get(part.lower())
+        if m:
+            return m
+    return _ROM_CORES.get(p.suffix.lower())         # else the unambiguous extension map
 
 
 def games_list():
@@ -2611,11 +2656,11 @@ def games_list():
         for p in sorted(ROMS_DIR.rglob("*")):
             if not p.is_file():
                 continue
-            meta = _ROM_CORES.get(p.suffix.lower())
+            meta = _system_for(p)
             if not meta:
                 continue
             roms.append({"path": str(p), "name": p.stem, "system": meta[0], "core": meta[1]})
-            if len(roms) >= 500:
+            if len(roms) >= 1000:
                 break
     except Exception as e:
         log("games_list failed:", e)
@@ -2628,6 +2673,61 @@ def _find_core(core):
         if so.exists():
             return str(so)
     return None
+
+
+# Removable-media mount roots to scan for ROMs (Linux/Pi). USB sticks auto-mount
+# under these; on Windows these don't exist so import cleanly finds nothing.
+_USB_ROOTS = ("/media", "/run/media", "/mnt")
+
+
+def import_usb_roms():
+    """Copy recognizable ROMs off any mounted USB drive into ROMS_DIR.
+    Preserves a system subfolder when the stick already uses the roms/<system>/
+    convention (so disc formats keep resolving). Returns {ok,count,found,detail}."""
+    copied, found, scanned = 0, 0, 0
+    try:
+        for root in _USB_ROOTS:
+            r = Path(root)
+            if not r.is_dir():
+                continue
+            for p in r.rglob("*"):
+                scanned += 1
+                if scanned > 60000:      # guard against a huge drive
+                    break
+                try:
+                    if not p.is_file() or ROMS_DIR in p.parents:
+                        continue
+                except OSError:
+                    continue
+                meta = _system_for(p)
+                if not meta:
+                    continue
+                found += 1
+                sysfolder = next((part for part in p.parts[:-1]
+                                  if part.lower() in _SYSTEM_FOLDERS), None)
+                dest_dir = (ROMS_DIR / sysfolder) if sysfolder else ROMS_DIR
+                dest = dest_dir / p.name
+                if dest.exists():
+                    continue
+                try:
+                    dest_dir.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(p, dest)
+                    copied += 1
+                except Exception as e:
+                    log("usb rom copy failed:", p, e)
+                if copied >= 1000:
+                    break
+    except Exception as e:
+        return {"ok": False, "count": copied, "found": found, "detail": str(e)}
+    if found == 0:
+        return {"ok": False, "count": 0, "found": 0,
+                "detail": "no USB drive with recognizable ROMs found (looked in /media, /run/media, /mnt)"}
+    detail = ("imported %d new ROM(s)" % copied) if copied else "USB found, but all %d ROM(s) already imported" % found
+    return {"ok": True, "count": copied, "found": found, "detail": detail}
+
+
+async def games_import_usb():
+    return await asyncio.get_event_loop().run_in_executor(None, import_usb_roms)
 
 
 async def route_message(state: GostState, ws, msg):
@@ -2656,6 +2756,10 @@ async def route_message(state: GostState, ws, msg):
     elif t == "app.kill":
         await state.kill_apps()
     elif t == "games.list":
+        await ws.send(json.dumps({"type": "games.list", "roms": games_list(), "dir": str(ROMS_DIR)}))
+    elif t == "games.import":
+        res = await games_import_usb()
+        await ws.send(json.dumps({"type": "games.import", **res}))
         await ws.send(json.dumps({"type": "games.list", "roms": games_list(), "dir": str(ROMS_DIR)}))
     elif t == "games.launch":
         ok = await state.launch_game(msg.get("path"))
