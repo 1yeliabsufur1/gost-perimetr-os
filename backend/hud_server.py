@@ -2384,26 +2384,6 @@ class GostState:
         log("no browser found, cannot launch app for", url)
         return False
 
-    async def launch_game(self, path):
-        if not path or not Path(path).is_file():
-            log("launch_game: bad path", path); return False
-        ra = shutil.which("retroarch") or shutil.which("retroarch.exe")
-        if not ra:
-            log("retroarch not installed, cannot launch game"); return False
-        await self.kill_apps()
-        args = [ra, "--fullscreen"]
-        meta = _system_for(path)
-        if meta:
-            core = _find_core(meta[1])
-            if core:
-                args += ["-L", core]   # explicit core; else RetroArch shows its menu to pick one
-        args.append(path)
-        try:
-            self.app_proc = await asyncio.create_subprocess_exec(*args)
-            return True
-        except Exception as e:
-            log("failed to launch retroarch:", e); return False
-
     async def kill_apps(self):
         if self.app_proc and self.app_proc.returncode is None:
             self.app_proc.terminate()
@@ -2634,8 +2614,6 @@ _SYSTEM_FOLDERS = {
 # disc/image extensions that only make sense once a system folder disambiguates them
 _DISC_EXTS = {".iso", ".cue", ".bin", ".chd", ".cso", ".pbp", ".gdi", ".cdi", ".m3u", ".img", ".rom"}
 _PLAYABLE_EXTS = set(_ROM_CORES) | _DISC_EXTS
-_CORE_DIRS = ("/usr/lib/libretro", "/usr/lib/aarch64-linux-gnu/libretro",
-              "/usr/local/lib/libretro", "/usr/lib/arm-linux-gnueabihf/libretro")
 
 
 def _system_for(path):
@@ -2666,14 +2644,6 @@ def games_list():
     except Exception as e:
         log("games_list failed:", e)
     return roms
-
-
-def _find_core(core):
-    for d in _CORE_DIRS:
-        so = Path(d) / (core + "_libretro.so")
-        if so.exists():
-            return str(so)
-    return None
 
 
 # Removable-media mount roots to scan for ROMs (Linux/Pi). USB sticks auto-mount
@@ -2762,9 +2732,6 @@ async def route_message(state: GostState, ws, msg):
         res = await games_import_usb()
         await ws.send(json.dumps({"type": "games.import", **res}))
         await ws.send(json.dumps({"type": "games.list", "roms": games_list(), "dir": str(ROMS_DIR)}))
-    elif t == "games.launch":
-        ok = await state.launch_game(msg.get("path"))
-        await ws.send(json.dumps({"type": "games.launch", "ok": bool(ok), "path": msg.get("path")}))
     elif t == "youtube.search":
         q = (msg.get("query") or "").strip()
         r = await youtube_search(q) if q else {"results": [], "token": None}

@@ -1239,7 +1239,6 @@ const Net = {
     else if (msg.type === "youtube.random") { YT.onRandom(msg); }
     else if (msg.type === "app.launch") { YT.onFullLaunch(msg); }
     else if (msg.type === "games.list") { Games.onList(msg); }
-    else if (msg.type === "games.launch") { Games.onLaunch(msg); }
     else if (msg.type === "games.import") { Games.onImport(msg); }
   },
   send(obj) { if (this.connected && this.ws) { try { this.ws.send(JSON.stringify(obj)); } catch (e) {} } },
@@ -1852,11 +1851,6 @@ const Games = {
     $("#ejs-overlay").classList.add("hidden");
   },
   ejsOpen() { return !$("#ejs-overlay").classList.contains("hidden"); },
-  onLaunch(msg) {
-    $("#games-msg").textContent = msg.ok
-      ? "launched -- press BACK on the unit to return to the head unit"
-      : "couldn't launch (RetroArch or the core may be missing on this device)";
-  },
 };
 $("#games-refresh-btn") && $("#games-refresh-btn").addEventListener("click", () => Games.activate());
 $("#games-import-btn") && $("#games-import-btn").addEventListener("click", () => Games.importUsb());

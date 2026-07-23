@@ -43,14 +43,8 @@ apt-get install -y liblgpio-dev || \
 apt-get install -y chromium-browser || apt-get install -y chromium || \
   log "WARNING: no chromium package found -- kiosk will not start"
 
-# RetroArch + libretro cores for the GAMES tab (emulator front-end). Best-effort
-# per-package so a missing core never fails the build; the user supplies ROMs.
-apt-get install -y retroarch || log "WARNING: retroarch unavailable -- GAMES tab will report it"
-for _core in libretro-fceumm libretro-snes9x libretro-gambatte libretro-mgba \
-             libretro-genesisplusgx libretro-mupen64plus-next libretro-beetle-pce \
-             libretro-pcsx-rearmed libretro-fbneo; do
-  apt-get install -y "$_core" || log "  (core $_core unavailable -- RetroArch's online updater can fetch it)"
-done
+# (GAMES tab uses in-browser EmulatorJS bundled in app/vendor/emulatorjs -- no
+# native RetroArch/libretro packages needed.)
 
 # pmtiles CLI (single Go binary) -- powers the turnkey offline map-region
 # download in NAV. Baked in at BUILD time so the device never installs a
