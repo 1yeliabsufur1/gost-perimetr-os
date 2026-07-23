@@ -137,22 +137,27 @@
 [data-theme="gameboy"]:not([data-gbc]) .yt-dur { color:#9bbc0f; }
 /* ---------- THE BACKROOMS (liminal mono-yellow, wallpaper grid, fluorescent buzz) ---------- */
 [data-theme="backrooms"] {
-  --pri:#2a2410; --dim:#6b5e2a; --bg:#b3a54a; --warn:#8a2e12; --glow:#efe08a; --line:#7c6f28;
+  --pri:#2e2712; --dim:#726326; --bg:#c3b34e; --warn:#7e2a10; --glow:#f3e79a; --line:#8a7828;
   --font:"Segoe UI","Trebuchet MS",system-ui,sans-serif; --display:"Segoe UI",sans-serif;
   --scan:0; --radius:0px; --letter:0.4px; --fsize:15px;
-  --bg-grad:linear-gradient(165deg,#bcaa4e 0%,#a89840 55%,#9b8b34 100%);
-  --thumb-filter:sepia(0.45) saturate(0.8) brightness(1.02) contrast(0.95);
+  --bg-grad:radial-gradient(ellipse at 50% 8%, #d6c65c 0%, #bfab46 46%, #a2913a 100%);
+  --thumb-filter:sepia(0.5) saturate(0.72) brightness(1.0) contrast(0.94);
 }
-/* damp-wallpaper / ceiling-tile grid behind the UI */
+/* liminal layering: buzzing light glow up top, dread vignette that swallows the
+   edges, damp yellow wallpaper + drop-ceiling tile grid -- all behind the UI */
 [data-theme="backrooms"] body::after {
   content:""; position:fixed; inset:0; z-index:-1; pointer-events:none;
   background-image:
-    repeating-linear-gradient(0deg, rgba(60,50,10,0.10) 0 1px, transparent 1px 46px),
-    repeating-linear-gradient(90deg, rgba(60,50,10,0.10) 0 1px, transparent 1px 46px);
+    linear-gradient(to bottom, rgba(255,251,214,0.24) 0%, transparent 18%),
+    radial-gradient(ellipse at 50% 42%, transparent 38%, rgba(26,20,4,0.58) 100%),
+    repeating-linear-gradient(0deg,  rgba(48,38,8,0.075) 0 1px, transparent 1px 56px),
+    repeating-linear-gradient(90deg, rgba(48,38,8,0.075) 0 1px, transparent 1px 56px);
 }
-/* the fluorescent hum -- mostly steady with brief buzzy flickers */
-[data-theme="backrooms"] body { animation:buzz 6s steps(1) infinite; }
-@keyframes buzz { 0%,96%,100%{filter:none} 97%{filter:brightness(1.16)} 98%{filter:brightness(0.88)} 99%{filter:brightness(1.08)} }
+/* the fluorescent hum -- a faint, slow, SMOOTH flicker (ambient, not a strobe) */
+[data-theme="backrooms"] body { animation:buzz 13s ease-in-out infinite; }
+@keyframes buzz {
+  0%,100%{filter:brightness(1)} 46%{filter:brightness(1.012)} 50%{filter:brightness(0.982)}
+  54%{filter:brightness(1.008)} 83%{filter:brightness(1)} 85%{filter:brightness(0.99)} 87%{filter:brightness(1)} }
 /* red SOUL heart as the focus cursor -- straight out of the UT menu */
 [data-theme="undertale"] [data-focus]:focus { outline:none; box-shadow:none; position:relative; }
 [data-theme="undertale"] [data-focus]:focus::after {
