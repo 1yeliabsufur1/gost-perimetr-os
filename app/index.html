@@ -589,7 +589,9 @@ a { color: var(--pri); }
             <button data-focus id="veh-rot-left">◄ ROTATE</button>
             <button data-focus id="veh-rot-right">ROTATE ►</button>
             <button data-focus id="veh-doortest-btn">[ LIVE DOOR TEST ]</button>
+            <button data-focus id="veh-mscan-btn">[ MS-CAN PROBE (EX/MX+) ]</button>
           </div>
+          <div id="veh-mscan-status" class="dim" style="font-size:12px; min-height:16px;"></div>
           <div id="veh-doortest-status" class="dim" style="font-size:12px; min-height:16px;"></div>
           <div id="veh-doortest-log" style="font-size:12px; text-align:left; max-height:90px; overflow-y:auto;"></div>
           <div id="veh-open-list" class="glow" style="font-size:15px; min-height:20px;"></div>
@@ -1180,6 +1182,15 @@ const Net = {
       Modal.open("OBD CAPTURE", (body) => {
         const pre = el("div", { style: "white-space:pre-wrap; font-size:12px; line-height:1.5;" }, [msg.result || "(no result)"]);
         body.appendChild(pre);
+        const close = el("button", { "data-focus": "" }, ["[ CLOSE ]"]);
+        close.addEventListener("click", () => Modal.close());
+        body.appendChild(el("div", { style: "margin-top:10px;" }, [close]));
+      });
+    }
+    else if (msg.type === "obd.mscan") {
+      const st = $("#veh-mscan-status"); if (st) st.textContent = "MS-CAN PROBE DONE";
+      Modal.open("MS-CAN / BODY PROBE", (body) => {
+        body.appendChild(el("div", { style: "white-space:pre-wrap; font-size:12px; line-height:1.5;" }, [msg.result || "(no result)"]));
         const close = el("button", { "data-focus": "" }, ["[ CLOSE ]"]);
         close.addEventListener("click", () => Modal.close());
         body.appendChild(el("div", { style: "margin-top:10px;" }, [close]));
@@ -3958,6 +3969,11 @@ function buildSettings() {
   $("#veh-rot-left").addEventListener("click", () => nudge(-0.4));
   $("#veh-rot-right").addEventListener("click", () => nudge(0.4));
   $("#veh-doortest-btn").addEventListener("click", () => DoorTest.start());
+  $("#veh-mscan-btn").addEventListener("click", () => {
+    if (!Net.connected) { $("#veh-mscan-status").textContent = "REQUIRES DEVICE (run in the truck, engine ON)"; return; }
+    $("#veh-mscan-status").textContent = "PROBING MS-CAN ~10s -- OPEN/CLOSE A DOOR NOW...";
+    Net.send({ type: "obd.mscan" });
+  });
   updateVehButtons();
   const setUnit = (key, val) => { Config.set(key, val); updateUnitButtons(); };
   $("#unit-f-btn").addEventListener("click", () => setUnit("units_temp", "F"));

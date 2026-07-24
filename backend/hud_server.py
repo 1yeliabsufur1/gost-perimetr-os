@@ -1056,6 +1056,60 @@ def _deep_probe(port, baud):
     return summary, "\n".join(lines) + "\n"
 
 
+def _mscan_probe(port, baud):
+    """MS-CAN body probe (executor). Switches an OBDLink EX/MX+ to Ford MS-CAN
+    (OBD pins 3/11, 125 kbps) -- the bus a normal HS-CAN ELM327 can't reach where
+    door/TPMS often live -- then passively sniffs it (headers on) and pokes the
+    BCM, logging everything so the door/TPMS frames can be reverse-engineered.
+    EXPERIMENTAL: the MS-CAN init + BCM addressing are best-guesses to be dialled
+    in against the real truck (a 2021 may route body data on gatewayed HS-CAN
+    instead). Returns (summary, logtext)."""
+    import time as _t
+    lines = []
+    raw = RawOBD(port, baud, "6")   # opens the port; we override the protocol below
+
+    def c(cmd, wait=0.25, rd=0.5):
+        return raw._cmd(cmd, wait, rd).replace("\r", " ").strip()
+
+    lines.append("# GOST MS-CAN / BODY probe %s" % datetime.now().isoformat())
+    lines.append("# needs an OBDLink EX/MX+ (STN chip). Switching to Ford MS-CAN.")
+    # Ford MS-CAN = ISO 15765 11-bit @ 125 kbps; ATSP B + ATPB 40 08. Headers ON
+    # so ATMA shows each frame's arbitration ID.
+    for cmd in ("ATZ", "ATE0", "ATL0", "ATS1", "ATH1", "ATSP B", "ATPB 40 08"):
+        lines.append("%-10s -> %s" % (cmd, c(cmd, 0.5 if cmd == "ATZ" else 0.25)))
+
+    # ---- passive monitor: dump every MS-CAN broadcast frame for ~8s ----
+    lines.append("# --- passive ATMA 8s: OPEN/CLOSE A DOOR and note tire PSI NOW ---")
+    raw.ser.reset_input_buffer()
+    raw.ser.write(b"ATMA\r")
+    buf, end = b"", _t.time() + 8
+    while _t.time() < end:
+        n = raw.ser.in_waiting
+        if n:
+            buf += raw.ser.read(n)
+        else:
+            _t.sleep(0.01)
+    raw._cmd("", 0.1, 0.5)   # any char stops ATMA
+    frames = [l for l in buf.decode(errors="replace").replace("\r", "\n").split("\n")
+              if l.strip() and l.strip() != ">"]
+    lines.append("# MS-CAN passive frames: %d" % len(frames))
+    lines.extend("  " + f for f in frames[:150])
+
+    # ---- active: poke the BCM/SJB directly on MS-CAN (candidate headers + DIDs) ----
+    lines.append("# --- active BCM query on MS-CAN (candidate headers/DIDs) ---")
+    for hdr in ("726", "737", "760"):
+        c("ATSH" + hdr, 0.25)
+        for did in ("22DD00", "22DD01", "224028", "22411F"):
+            lines.append("  %s@%s -> %s" % (did, hdr, c(did, 0.35, 0.6)))
+    raw.close()
+
+    summary = ("MS-CAN PROBE DONE\npassive frames: %d\n"
+               "  0 = MS-CAN empty/absent (this 2021 likely routes body data on\n"
+               "      gatewayed HS-CAN) -- OBD dead-end, need a CAN tap or sensors.\n"
+               "  >0 = there's traffic we can decode -- share the log." % len(frames))
+    return summary, "\n".join(lines) + "\n"
+
+
 def _try_raw(port, protocol, baud):
     """Return a linked RawOBD (RPM OR speed answering) or None. Retries a few
     times because the bus can need a beat to settle right after the protocol
@@ -1218,6 +1272,29 @@ class Telemetry:
                 "\nPull it from the boot drive's gost-obd folder, or tell Claude to SSH."
         except Exception as e:
             return "capture failed: %s" % e
+        finally:
+            self.diag_pause = False
+
+    async def run_mscan(self):
+        """MS-CAN body probe (OBDLink EX/MX+): switch to Ford MS-CAN, sniff it and
+        poke the BCM to try reaching door/TPMS the HS-CAN port can't. Logs to the
+        boot partition. Experimental -- for reverse-engineering on the truck."""
+        loop = asyncio.get_event_loop()
+        self.diag_pause = True
+        await asyncio.sleep(0.6)
+        self._close_obd()
+        try:
+            port = self.obd_port or "/dev/ttyUSB0"
+            summary, logtext = await loop.run_in_executor(None, _mscan_probe, port, 115200)
+            path = _obd_capture_dir() + "/mscan-%d.log" % int(time.time())
+            try:
+                with open(path, "w") as f:
+                    f.write(logtext)
+            except Exception as e:
+                path = "(write failed: %s)" % e
+            return summary + "\n\nSAVED: " + path
+        except Exception as e:
+            return "MS-CAN probe failed: %s" % e
         finally:
             self.diag_pause = False
 
@@ -2766,6 +2843,9 @@ async def route_message(state: GostState, ws, msg):
     elif t == "obd.capture":
         result = await state.telemetry.run_capture()
         await ws.send(json.dumps({"type": "obd.capture", "result": result}))
+    elif t == "obd.mscan":
+        result = await state.telemetry.run_mscan()
+        await ws.send(json.dumps({"type": "obd.mscan", "result": result}))
     elif t == "obd.watch":
         result = await state.telemetry.run_watch()
         await ws.send(json.dumps({"type": "obd.watch", "result": result}))
