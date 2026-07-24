@@ -750,10 +750,7 @@ a { color: var(--pri); }
             <button data-focus id="veh-style-2d">2D FLAT</button>
           </div>
           <div class="settings-row">
-            <span class="dim">VIEW:</span>
-            <button data-focus id="veh-view-top34">3/4 TOP-DOWN</button>
-            <button data-focus id="veh-view-side">LOW SIDE</button>
-            <span class="dim" style="margin-left:14px;">SPIN:</span>
+            <span class="dim">SPIN:</span>
             <button data-focus id="veh-spin-on">ON</button>
             <button data-focus id="veh-spin-off">OFF</button>
           </div>
@@ -2250,11 +2247,9 @@ const VehArt = {
     if (!cw || !ch) return;
     if (!this.body) this.profile("truck", 4);
     if ((Config.data.veh_style || "3d") === "2d") { this.draw2d(cv, ts); return; }
-    // View + spin come from Settings: 3/4 top-down (default, bailey) vs low
-    // side; spinning optional, default a fixed 3/4 pose.
-    // NEGATIVE pitch = camera above the car. +0.95 was a belly view (bailey:
-    // "that's a bottom view, not god's eye").
-    this.tilt = (Config.data.veh_view || "top34") === "side" ? -0.35 : -0.95;
+    // Low side view only (bailey: looks better than the old 3/4 top-down, which
+    // was removed). NEGATIVE pitch = camera above the car; -0.35 = a low side angle.
+    this.tilt = -0.35;
     if ((Config.data.veh_spin || "off") === "on") this.rot += 0.006;
     else {
       // Ease toward the user-chosen resting angle (◄/► buttons); default 3/4.
@@ -3952,8 +3947,6 @@ function buildSettings() {
   $("#veh-doors-4").addEventListener("click", () => setVeh("veh_doors", 4));
   $("#veh-style-3d").addEventListener("click", () => setVeh("veh_style", "3d"));
   $("#veh-style-2d").addEventListener("click", () => setVeh("veh_style", "2d"));
-  $("#veh-view-top34").addEventListener("click", () => setVeh("veh_view", "top34"));
-  $("#veh-view-side").addEventListener("click", () => setVeh("veh_view", "side"));
   $("#veh-spin-on").addEventListener("click", () => setVeh("veh_spin", "on"));
   $("#veh-spin-off").addEventListener("click", () => setVeh("veh_spin", "off"));
   const nudge = (d) => {
@@ -4115,9 +4108,6 @@ function updateVehButtons() {
   const style = Config.data.veh_style || "3d";
   $("#veh-style-3d").classList.toggle("selected", style === "3d");
   $("#veh-style-2d").classList.toggle("selected", style === "2d");
-  const view = Config.data.veh_view || "top34";
-  $("#veh-view-top34").classList.toggle("selected", view === "top34");
-  $("#veh-view-side").classList.toggle("selected", view === "side");
   const spin = Config.data.veh_spin || "off";
   $("#veh-spin-on").classList.toggle("selected", spin === "on");
   $("#veh-spin-off").classList.toggle("selected", spin === "off");
