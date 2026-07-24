@@ -297,7 +297,7 @@ a { color: var(--pri); }
 .stat-box .value { font-size: 28px; }
 #drive-live-banner { font-size: 12px; letter-spacing: 2px; padding: 4px 8px; margin-bottom: 8px; border: 1px solid var(--line); }
 #drive-live-banner:empty { display: none; }
-#drive-live-banner.live { color: #4fe38a; border-color: #4fe38a; }
+#drive-live-banner.live { color: var(--glow); border-color: var(--glow); }
 #drive-live-banner.sim { color: var(--dim); }
 #drive-notconnected {
   position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
@@ -1870,7 +1870,7 @@ function renderDrive(t) {
   // Top-bar source indicator: unmistakable when we're on the real truck.
   const srcEl = $("#src-label");
   if (srcEl) {
-    if (t && t.live) { srcEl.textContent = "● LIVE · OBDLINK"; srcEl.style.color = "var(--ok, #4fe38a)"; }
+    if (t && t.live) { srcEl.textContent = "● LIVE · OBDLINK"; srcEl.style.color = "var(--glow)"; }
     else { srcEl.textContent = srcModeLabel(t && t.source_mode); srcEl.style.color = ""; }
   }
   const overlay = $("#drive-notconnected");
