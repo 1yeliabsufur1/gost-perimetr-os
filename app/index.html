@@ -661,7 +661,7 @@ a { color: var(--pri); }
             <button data-focus id="games-refresh-btn">[ RESCAN ROMS ]</button>
             <span id="games-msg" class="dim" style="font-size:12px;"></span>
             <input type="file" id="games-file-input" style="display:none;"
-                   accept=".nes,.fds,.sfc,.smc,.gb,.gbc,.gba,.n64,.z64,.v64,.nds,.md,.gen,.smd,.sms,.gg,.32x,.pce,.ngp,.ws,.wsc,.a26,.a78,.lnx,.j64,.col,.d64,.zip,.iso,.cue,.bin,.chd,.pbp">
+                   accept=".ch8,.nes,.fds,.sfc,.smc,.gb,.gbc,.gba,.n64,.z64,.v64,.nds,.md,.gen,.smd,.sms,.gg,.32x,.pce,.ngp,.ws,.wsc,.a26,.a78,.lnx,.j64,.col,.d64,.zip,.iso,.cue,.bin,.chd,.pbp">
           </div>
           <div id="games-list"></div>
         </div>
@@ -863,6 +863,7 @@ a { color: var(--pri); }
 
 <script src="vendor/pmtiles.js"></script>
 <script src="vendor/maplibre-gl.js"></script>
+<script src="vendor/chip8.js"></script>
 <script>
 "use strict";
 /* ===========================================================================
@@ -1486,6 +1487,7 @@ function switchTab(delta) {
 }
 function handleAction(action) {
   if (action === "back_hold") { universalBack(); return; }
+  if (Games.chip8) { Games.chip8Pad(action); return; }   // pad drives the CHIP-8 game
   const handler = TabHandlers[State.tab];
   if (handler && handler.onAction && handler.onAction(action)) return;
   switch (action) {
@@ -1771,20 +1773,20 @@ function buildHome() {
  * ========================================================================== */
 const Games = {
   activate() {
+    const box = $("#games-list"); box.innerHTML = "";
+    this.addBuiltinChip8();   // always available, offline
     if (Net.connected) { $("#games-msg").textContent = "scanning ROMs..."; Net.send({ type: "games.list" }); }
-    else {
-      $("#games-list").innerHTML = "";
-      $("#games-msg").textContent = "Games run on the device (RetroArch). Drop ROMs in the roms/ folder and RESCAN.";
-    }
+    else { $("#games-msg").textContent = "Built-in CHIP-8 games below (offline). Console ROMs run in-browser too -- LOAD ROM FILE."; }
   },
   onList(msg) {
     const box = $("#games-list"); box.innerHTML = "";
+    this.addBuiltinChip8();   // built-in CHIP-8 first, then the device ROMs
     if (!msg.roms || !msg.roms.length) {
-      $("#games-msg").innerHTML = "No ROMs in <b>" + (msg.dir || "roms/") +
-        "</b> -- copy your own game files (.nes .gb .gbc .gba .sfc .md .n64 ...) there via USB or TERM, then RESCAN.";
+      $("#games-msg").innerHTML = "Built-in CHIP-8 games above. No console ROMs in <b>" + (msg.dir || "roms/") +
+        "</b> yet -- LOAD ROM FILE, IMPORT FROM USB, or copy games there and RESCAN.";
       return;
     }
-    $("#games-msg").textContent = msg.roms.length + " game(s) -- powered by RetroArch (you supply your own ROMs).";
+    $("#games-msg").textContent = msg.roms.length + " console game(s) + built-in CHIP-8 (in-browser, you supply console ROMs).";
     for (const g of msg.roms) {
       box.appendChild(el("button", { class: "game-card", "data-focus": "", onclick: () => Games.launch(g) }, [
         el("div", { class: "game-sys" }, [g.system || ""]),
@@ -1831,9 +1833,11 @@ const Games = {
   playFile(file) {
     if (!file) return;
     const ext = "." + file.name.split(".").pop().toLowerCase();
+    const name = file.name.replace(/\.[^.]+$/, "");
+    if (ext === ".ch8") { file.arrayBuffer().then(b => this.playChip8(new Uint8Array(b), name)); return; }
     const core = this.EJS_BY_EXT[ext];
     if (!core) { $("#games-msg").textContent = "unsupported ROM type: " + ext; return; }
-    this.launchEJS(core, URL.createObjectURL(file), file.name.replace(/\.[^.]+$/, ""));
+    this.launchEJS(core, URL.createObjectURL(file), name);
   },
   // cores bundled offline in app/vendor; everything else streams from the CDN
   BUNDLED_CORES: new Set(["gb", "gba", "nes", "snes", "segaMD"]),
@@ -1860,10 +1864,49 @@ const Games = {
     try { if (window.EJS_emulator && window.EJS_emulator.pause) window.EJS_emulator.pause(); } catch (e) {}
     try { if (window.EJS_emulator && window.EJS_emulator.elements && window.EJS_emulator.elements.parent) window.EJS_emulator.elements.parent.remove(); } catch (e) {}
     window.EJS_emulator = null;
+    if (this.chip8) { this.chip8.stop(); this.chip8 = null; window.removeEventListener("keydown", this._c8key); window.removeEventListener("keyup", this._c8key); }
     const host = $("#ejs-host"); if (host) host.innerHTML = "";
     $("#ejs-overlay").classList.add("hidden");
   },
   ejsOpen() { return !$("#ejs-overlay").classList.contains("hidden"); },
+  /* ---- built-in CHIP-8 games (our own emulator, fully offline) ---- */
+  BUILTIN_CHIP8: [
+    { name: "Breakout", file: "br8kout" }, { name: "Snake", file: "snek" },
+    { name: "Danmaku", file: "danm8ku" }, { name: "Glitch Ghost", file: "glitchGhost" },
+    { name: "Rock Paper Scissors", file: "RPS" }, { name: "Octojam Title", file: "octojam1title" },
+  ],
+  addBuiltinChip8() {
+    const box = $("#games-list");
+    for (const g of this.BUILTIN_CHIP8) {
+      box.appendChild(el("button", { class: "game-card", "data-focus": "", onclick: () => Games.playChip8Url("vendor/chip8/roms/" + g.file + ".ch8", g.name) }, [
+        el("div", { class: "game-sys" }, ["CHIP-8 · BUILT-IN"]),
+        el("div", { class: "game-name" }, [g.name]),
+      ]));
+    }
+  },
+  playChip8Url(url, name) {
+    fetch(url).then(r => r.arrayBuffer()).then(b => this.playChip8(new Uint8Array(b), name))
+      .catch(() => { $("#games-msg").textContent = "couldn't load " + name; });
+  },
+  playChip8(bytes, name) {
+    this.stopEJS();
+    $("#ejs-host").innerHTML = '<canvas id="c8-canvas" width="640" height="320" style="width:100%; height:100%; image-rendering:pixelated; background:var(--bg); display:block;"></canvas>';
+    this.chip8 = new Chip8($("#c8-canvas"));
+    this.chip8.load(bytes); this.chip8.start();
+    $("#ejs-title").textContent = (name || "GAME") + "  ·  CHIP-8";
+    $("#ejs-overlay").classList.remove("hidden");
+    // keyboard: classic 1234/QWER/ASDF/ZXCV -> CHIP-8 hex keypad
+    const MAP = { Digit1: 0x1, Digit2: 0x2, Digit3: 0x3, Digit4: 0xC, KeyQ: 0x4, KeyW: 0x5, KeyE: 0x6, KeyR: 0xD,
+                  KeyA: 0x7, KeyS: 0x8, KeyD: 0x9, KeyF: 0xE, KeyZ: 0xA, KeyX: 0x0, KeyC: 0xB, KeyV: 0xF };
+    this._c8key = (e) => { const k = MAP[e.code]; if (k !== undefined && this.chip8) { this.chip8.key(k, e.type === "keydown"); e.preventDefault(); } };
+    window.addEventListener("keydown", this._c8key); window.addEventListener("keyup", this._c8key);
+  },
+  // 5-way pad -> the CHIP-8 keys most games use (brief press)
+  chip8Pad(action) {
+    const m = { up: 0x2, down: 0x8, left: 0x4, right: 0x6, enter: 0x5 };
+    const k = m[action]; if (k === undefined || !this.chip8) return;
+    this.chip8.key(k, true); setTimeout(() => this.chip8 && this.chip8.key(k, false), 140);
+  },
 };
 $("#games-refresh-btn") && $("#games-refresh-btn").addEventListener("click", () => Games.activate());
 $("#games-import-btn") && $("#games-import-btn").addEventListener("click", () => Games.importUsb());
