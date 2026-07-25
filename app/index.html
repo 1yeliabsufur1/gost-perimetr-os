@@ -490,6 +490,10 @@ a { color: var(--pri); }
 #ejs-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 #ejs-host { flex:1; min-height:0; }
 #ejs-host > div, #ejs-host #ejs { width:100%; height:100%; }
+/* on-screen CHIP-8 hex keypad -- big touch targets for the 7" screen */
+#c8-pad { display:grid; grid-template-columns:repeat(4,1fr); gap:6px; padding:8px 12px calc(8px + env(safe-area-inset-bottom)); background:var(--bg); border-top:1px solid var(--line); }
+.c8-key { min-height:52px; font:700 20px/1 var(--font,inherit); color:var(--pri); background:var(--dim,#111); border:1px solid var(--line); border-radius:var(--radius,4px); touch-action:none; user-select:none; -webkit-user-select:none; }
+.c8-key:active { background:var(--pri); color:var(--bg); }
 #yt-player { position:fixed; inset:0; z-index:540; display:flex; flex-direction:column; background:#000; }
 #yt-player-bar { padding:8px 12px; border-bottom:1px solid var(--line); font-size:13px; display:flex; justify-content:space-between; gap:8px; background:var(--bg); }
 #yt-player-title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -1865,15 +1869,16 @@ const Games = {
     try { if (window.EJS_emulator && window.EJS_emulator.elements && window.EJS_emulator.elements.parent) window.EJS_emulator.elements.parent.remove(); } catch (e) {}
     window.EJS_emulator = null;
     if (this.chip8) { this.chip8.stop(); this.chip8 = null; window.removeEventListener("keydown", this._c8key); window.removeEventListener("keyup", this._c8key); }
+    const pad = $("#c8-pad"); if (pad) pad.remove();
     const host = $("#ejs-host"); if (host) host.innerHTML = "";
     $("#ejs-overlay").classList.add("hidden");
   },
   ejsOpen() { return !$("#ejs-overlay").classList.contains("hidden"); },
   /* ---- built-in CHIP-8 games (our own emulator, fully offline) ---- */
   BUILTIN_CHIP8: [
-    { name: "Breakout", file: "br8kout" }, { name: "Snake", file: "snek" },
-    { name: "Danmaku", file: "danm8ku" }, { name: "Glitch Ghost", file: "glitchGhost" },
-    { name: "Rock Paper Scissors", file: "RPS" }, { name: "Octojam Title", file: "octojam1title" },
+    { name: "Breakout", file: "br8kout" }, { name: "Cave Explorer", file: "caveexplorer" },
+    { name: "ChipWar", file: "chipwar" }, { name: "Outlaw", file: "outlaw" },
+    { name: "Slippery Slope", file: "slipperyslope" }, { name: "Pumpkin Dress-Up", file: "pumpkindressup" },
   ],
   addBuiltinChip8() {
     const box = $("#games-list");
@@ -1900,6 +1905,22 @@ const Games = {
                   KeyA: 0x7, KeyS: 0x8, KeyD: 0x9, KeyF: 0xE, KeyZ: 0xA, KeyX: 0x0, KeyC: 0xB, KeyV: 0xF };
     this._c8key = (e) => { const k = MAP[e.code]; if (k !== undefined && this.chip8) { this.chip8.key(k, e.type === "keydown"); e.preventDefault(); } };
     window.addEventListener("keydown", this._c8key); window.addEventListener("keyup", this._c8key);
+    $("#ejs-overlay").appendChild(this.makeChip8Pad());   // on-screen keypad for touch
+  },
+  // 16-key CHIP-8 hex keypad as big touch buttons (7" touchscreen)
+  makeChip8Pad() {
+    const layout = [[0x1,"1"],[0x2,"2"],[0x3,"3"],[0xC,"C"],[0x4,"4"],[0x5,"5"],[0x6,"6"],[0xD,"D"],
+                    [0x7,"7"],[0x8,"8"],[0x9,"9"],[0xE,"E"],[0xA,"A"],[0x0,"0"],[0xB,"B"],[0xF,"F"]];
+    const pad = el("div", { id: "c8-pad" });
+    for (const [k, label] of layout) {
+      const b = el("button", { class: "c8-key" }, [label]);
+      const dn = (e) => { e.preventDefault(); if (this.chip8) this.chip8.key(k, true); };
+      const up = (e) => { e.preventDefault(); if (this.chip8) this.chip8.key(k, false); };
+      b.addEventListener("pointerdown", dn); b.addEventListener("pointerup", up);
+      b.addEventListener("pointerleave", up); b.addEventListener("pointercancel", up);
+      pad.appendChild(b);
+    }
+    return pad;
   },
   // 5-way pad -> the CHIP-8 keys most games use (brief press)
   chip8Pad(action) {
