@@ -693,6 +693,7 @@ a { color: var(--pri); }
         <div id="nav-hud" class="hidden">
           <button data-focus id="nav-map-mode-btn">[ MAP MODE ]</button>
           <button data-focus id="nav-set-dest-btn">[ SET DESTINATION ]</button>
+          <button data-focus id="nav-maps-btn" style="display:none">[ MAPS ]</button>
           <button data-focus id="nav-clear-route-btn" class="hidden">[ CLEAR ROUTE ]</button>
           <div id="nav-mode-badge" class="hidden">MAP MODE -- PAD PANS, ENTER ZOOMS IN, HOLD &lt;- 5s EXITS</div>
           <div id="nav-turn-banner" class="hidden"></div>
@@ -1420,9 +1421,15 @@ const Maps = {
   },
   progress(line) { this.setStatus(line); },
   done(msg) {
-    this.setStatus(msg.ok ? ("DONE -- " + (msg.detail || "") + "  (map loading...)")
+    this.setStatus(msg.ok ? ("DONE -- " + (msg.detail || "") + "  (loading map...)")
                           : ("FAILED -- " + (msg.detail || "")));
-    if (msg.ok) setTimeout(() => { if (Net.connected) Net.send({ type: "config.get" }); Nav.activate && Nav.activate(); }, 1500);
+    // reloadMaps() forces a fresh init (activate() would no-op here) and shows
+    // the region we just downloaded. setTab makes sure NAV is on-screen.
+    if (msg.ok) setTimeout(() => {
+      if (Net.connected) Net.send({ type: "config.get" });
+      setTab("nav");
+      Nav.reloadMaps ? Nav.reloadMaps(msg.file) : (Nav.activate && Nav.activate());
+    }, 1200);
   },
   setStatus(t) { const s = $("#nav-download-status"); if (s) s.textContent = t; },
 };
@@ -3747,16 +3754,30 @@ const Nav = {
     this.activated = true;
     this.tryLoadMaps();
   },
-  async tryLoadMaps() {
+  // Force a fresh (re)load -- used after a region download or a map pick, where
+  // activate()'s one-shot guard would otherwise skip re-initialising the map.
+  async reloadMaps(file) {
+    if (this.map) { try { this.map.remove(); } catch (e) {} this.map = null; }
+    this.activated = true;
+    await this.tryLoadMaps(file);
+  },
+  async tryLoadMaps(preferred) {
     let maps = [];
     try {
       const resp = await fetch("/api/maps");
       if (resp.ok) maps = (await resp.json()).maps || [];
     } catch (e) { /* no backend -- standalone/demo */ }
+    this.availableMaps = maps;
+    this.updateMapPickerBtn();
     if (!maps.length) {
       this.showFallback("NO OFFLINE MAP DATA -- open the TERM tab and run:  wget -P /opt/gost/maps <url of a .pmtiles region>  (free region extracts at protomaps.com/downloads), or put a .pmtiles in a maps/ folder on a USB stick. Reboot after -- the map loads automatically.");
       return;
     }
+    // Which region to show: the just-downloaded/picked one, else the last
+    // choice, else the first available.
+    const chosen = (preferred && maps.includes(preferred)) ? preferred
+                 : (maps.includes(this.currentMap) ? this.currentMap : maps[0]);
+    this.currentMap = chosen;
     try {
       if (window.pmtiles && window.maplibregl) {
         const protocol = new pmtiles.Protocol();
@@ -3774,7 +3795,7 @@ const Nav = {
           zoom: this.lastFix ? 12 : 2,
           style: {
             version: 8,
-            sources: { p: { type: "vector", url: `pmtiles://maps/${maps[0]}` } },
+            sources: { p: { type: "vector", url: `pmtiles://maps/${chosen}` } },
             layers: [
               { id: "bg", type: "background", paint: { "background-color": C.bg } },
               { id: "earth", type: "fill", source: "p", "source-layer": "earth", paint: { "fill-color": C.bg } },
@@ -3801,6 +3822,7 @@ const Nav = {
         $("#nav-map").classList.remove("hidden");
         $("#nav-fallback").classList.add("hidden");
         $("#nav-hud").classList.remove("hidden");
+        this.updateMapPickerBtn();
       } else {
         this.showFallback("MAP LIBRARY FAILED TO LOAD");
       }
@@ -3811,7 +3833,41 @@ const Nav = {
     $("#nav-fallback").classList.remove("hidden");
     $("#nav-map").classList.add("hidden");
     $("#nav-hud").classList.add("hidden");
+    this.updateMapPickerBtn();
     this.drawRadar();
+  },
+  // Map picker -- switch which downloaded region is displayed. (Before, you
+  // could download several regions but only ever saw maps[0] with no chooser.)
+  updateMapPickerBtn() {
+    const btn = $("#nav-maps-btn");
+    if (!btn) return;
+    const n = (this.availableMaps || []).length;
+    btn.style.display = n ? "" : "none";
+    const cur = (this.currentMap || "").replace(/\.pmtiles$/i, "");
+    btn.textContent = (n > 1 && cur) ? `[ MAP: ${cur} ▾ ]` : "[ MAPS ]";
+  },
+  showMapPicker() {
+    Modal.open("MAPS", (body) => {
+      const maps = this.availableMaps || [];
+      if (maps.length) {
+        body.appendChild(el("div", { class: "dim", style: "margin-bottom:8px;" }, ["DOWNLOADED REGIONS -- tap to view:"]));
+        maps.forEach((f) => {
+          const active = (f === this.currentMap);
+          const b = el("button", { "data-focus": "", style: "display:block; width:100%; text-align:left; margin:2px 0;" },
+            [(active ? "● " : "  ") + f.replace(/\.pmtiles$/i, "")]);
+          b.addEventListener("click", () => { Modal.close(); this.reloadMaps(f); });
+          body.appendChild(b);
+        });
+      } else {
+        body.appendChild(el("div", { class: "dim", style: "margin-bottom:8px;" }, ["No regions downloaded yet."]));
+      }
+      const dl = el("button", { "data-focus": "", style: "display:block; width:100%; margin-top:10px;" }, ["[ DOWNLOAD ANOTHER REGION ]"]);
+      dl.addEventListener("click", () => { Modal.close(); Maps.open(); });
+      body.appendChild(dl);
+      const close = el("button", { "data-focus": "", style: "margin-top:8px;" }, ["[ CLOSE ]"]);
+      close.addEventListener("click", () => Modal.close());
+      body.appendChild(close);
+    });
   },
   startDemoFix() {
     let angle = 0;
@@ -4286,6 +4342,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initMusic();
   $("#nav-map-mode-btn").addEventListener("click", () => Nav.toggleMapMode());
   $("#nav-set-dest-btn").addEventListener("click", () => Nav.toggleDestMode());
+  $("#nav-maps-btn").addEventListener("click", () => Nav.showMapPicker());
   $("#nav-clear-route-btn").addEventListener("click", () => Nav.clearRoute());
   renderTvChannelList();
   renderGuideChannelList();

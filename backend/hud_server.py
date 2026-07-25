@@ -298,7 +298,8 @@ async def maps_download(state, region, bbox=None, maxzoom=None):
                 state.broadcast({"type": "maps.progress", "line": txt})
         rc = await proc.wait()
         ok = rc == 0 and os.path.exists(out) and os.path.getsize(out) > 0
-        return {"ok": ok, "detail": ("saved " + os.path.basename(out)) if ok
+        return {"ok": ok, "file": os.path.basename(out) if ok else None,
+                "detail": ("saved " + os.path.basename(out)) if ok
                 else "extract failed (rc %s)" % rc}
     except Exception as e:
         return {"ok": False, "detail": str(e)}
