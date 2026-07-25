@@ -13,6 +13,7 @@ import random
 import re
 import shutil
 import signal
+import subprocess
 import socket
 import sys
 import time
@@ -2934,11 +2935,49 @@ def games_list():
 _USB_ROOTS = ("/media", "/run/media", "/mnt")
 
 
+def _mount_usb_drives():
+    """The kiosk has no desktop auto-mounter, so a plugged-in USB stick is never
+    mounted and the ROM/media scan finds nothing (bailey: "only system storage").
+    Find unmounted removable partitions and mount them read-only under
+    /media/gost-usb-* (operator has NOPASSWD sudo). Returns the mount points."""
+    mounts = []
+    try:
+        proc = subprocess.run(
+            ["lsblk", "-rno", "NAME,TYPE,RM,MOUNTPOINT,FSTYPE"],
+            capture_output=True, text=True, timeout=10)
+        for line in proc.stdout.splitlines():
+            f = line.split(" ")
+            if len(f) < 3:
+                continue
+            name, typ, rm = f[0], f[1], f[2]
+            mnt = f[3] if len(f) > 3 else ""
+            fstype = f[4] if len(f) > 4 else ""
+            if typ != "part" or rm != "1" or mnt or not fstype:
+                continue                      # only unmounted removable partitions
+            dev = "/dev/" + name
+            mp = "/media/gost-usb-" + name
+            try:
+                os.makedirs(mp, exist_ok=True)
+                opts = "ro,noatime,uid=%d,gid=%d" % (os.getuid(), os.getgid()) \
+                    if fstype in ("vfat", "exfat", "ntfs") else "ro,noatime"
+                r = subprocess.run(["sudo", "-n", "mount", "-o", opts, dev, mp],
+                                   capture_output=True, text=True, timeout=15)
+                if r.returncode == 0:
+                    mounts.append(mp)
+                    log("mounted USB", dev, "->", mp)
+            except Exception as e:
+                log("usb mount failed", dev, e)
+    except Exception as e:
+        log("lsblk failed:", e)
+    return mounts
+
+
 def import_usb_roms():
     """Copy recognizable ROMs off any mounted USB drive into ROMS_DIR.
     Preserves a system subfolder when the stick already uses the roms/<system>/
     convention (so disc formats keep resolving). Returns {ok,count,found,detail}."""
     copied, found, scanned = 0, 0, 0
+    _mount_usb_drives()          # mount the stick first -- kiosk has no auto-mounter
     try:
         for root in _USB_ROOTS:
             r = Path(root)

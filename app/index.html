@@ -523,6 +523,11 @@ a { color: var(--pri); }
 [data-touch] .tab, [data-touch] .navbtn, [data-touch] [role="tab"] { padding:16px 12px; }
 [data-touch] .pw-toggle { min-height:48px; }
 [data-touch] .c8-key { min-height:60px; font-size:22px; }
+/* Hide the mouse pointer on touch: the last-used input is auto-detected
+ * (data-pointer), and Touch Mode forces it off (bailey: the cursor sitting in
+ * the middle of the screen is annoying on the touchscreen). */
+html[data-pointer="touch"], html[data-pointer="touch"] *,
+[data-touch], [data-touch] * { cursor: none !important; }
 </style>
 </head>
 <body>
@@ -558,7 +563,7 @@ a { color: var(--pri); }
 
     <main id="content">
       <section id="tab-home" class="tab">
-        <div class="frame" data-title="GOST // PERIMETR OS v3">
+        <div class="frame" data-title="GOST // PERIMETR OS">
           <div id="home-list"></div>
         </div>
       </section>
@@ -953,6 +958,20 @@ const Config = {
 /* Touch mode: enlarge tap targets for the 7" touchscreen (data-touch on <html>). */
 function applyTouch(on) { document.documentElement.toggleAttribute("data-touch", !!on); }
 
+/* Auto-detect touch vs mouse so we can hide the cursor on the touchscreen.
+ * A touch sets data-pointer=touch; a *real* mouse move (not the synthetic one
+ * a browser fires just after a tap) switches it back to mouse. */
+(function () {
+  let lastTouch = 0;
+  addEventListener("touchstart", () => {
+    lastTouch = Date.now();
+    document.documentElement.setAttribute("data-pointer", "touch");
+  }, { passive: true });
+  addEventListener("mousemove", () => {
+    if (Date.now() - lastTouch > 600) document.documentElement.setAttribute("data-pointer", "mouse");
+  }, { passive: true });
+})();
+
 function applyTheme(id) {
   const root = document.documentElement;
   root.setAttribute("data-theme", id);
@@ -1150,6 +1169,7 @@ const Net = {
       // Top-left indicator = real Wi-Fi state: poll now + every 10s.
       this.send({ type: "wifi.status" });
       this.send({ type: "ssh.status" });
+      this.send({ type: "system.info" });   // real version for ABOUT (not the hardcoded default)
       if (!this._wifiPoll) this._wifiPoll = setInterval(() => this.send({ type: "wifi.status" }), 10000);
     };
     this.ws.onclose = () => { this.connected = false; updateConnIndicator(); this.onDisconnect(); };
@@ -1829,7 +1849,7 @@ const Boot = {
     const body = $("#boot-body");
     body.innerHTML = "";
     const lines = [
-      "GOST/PERIMETR OS v3.0.0",
+      "GOST/PERIMETR OS v" + (LastInfo.data.version || ""),
       "INIT KERNEL ....................",
       "MOUNTING /opt/gost/media .......",
       "STARTING TELEMETRY BUS .........",
@@ -1872,7 +1892,7 @@ function setTab(name) {
   if (name === "settings") renderAbout(LastInfo.data);
   setTimeout(() => { const f = focusables()[0]; if (f) f.focus(); }, 0);
 }
-const LastInfo = { data: { version: "3.0.0", hostname: "unknown" } };
+const LastInfo = { data: { version: "1.2.0", hostname: "unknown" } };
 
 function buildTabbar() {
   const bar = $("#tabbar");
@@ -1982,6 +2002,21 @@ const Games = {
   BUNDLED_CORES: new Set(["gb", "gba", "nes", "snes", "segaMD"]),
   launchEJS(core, url, name) {
     this.stopEJS();
+    // Track audio contexts EmulatorJS creates so stopEJS can silence them --
+    // pausing the emulator leaves the WebAudio graph playing otherwise, which
+    // read as "a game running in the background" needing a reboot (bailey).
+    if (!window._gostAudioPatched) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (AC) {
+        window._gostAudioCtxs = [];
+        const Wrapped = function (...a) { const c = new AC(...a); try { window._gostAudioCtxs.push(c); } catch (e) {} return c; };
+        Wrapped.prototype = AC.prototype;
+        window.AudioContext = Wrapped;
+        if (window.webkitAudioContext) window.webkitAudioContext = Wrapped;
+      }
+      window._gostAudioPatched = true;
+    }
+    window._gostAudioCtxs = [];
     $("#ejs-host").innerHTML = '<div id="ejs"></div>';
     window.EJS_player = "#ejs";
     window.EJS_core = core;
@@ -2000,9 +2035,25 @@ const Games = {
     document.body.appendChild(s);
   },
   stopEJS() {
-    try { if (window.EJS_emulator && window.EJS_emulator.pause) window.EJS_emulator.pause(); } catch (e) {}
-    try { if (window.EJS_emulator && window.EJS_emulator.elements && window.EJS_emulator.elements.parent) window.EJS_emulator.elements.parent.remove(); } catch (e) {}
+    const e = window.EJS_emulator;
+    try {
+      if (e) {
+        try { e.pause && e.pause(); } catch (_) {}
+        try { e.callEvent && e.callEvent("exit"); } catch (_) {}
+        // stop the emscripten main loop so the core stops stepping entirely
+        try {
+          const M = e.gameManager && e.gameManager.Module;
+          if (M) { M.pauseMainLoop && M.pauseMainLoop(); try { M.exit && M.exit(0); } catch (_) {} }
+        } catch (_) {}
+        try { e.elements && e.elements.parent && e.elements.parent.remove(); } catch (_) {}
+      }
+    } catch (_) {}
+    // silence any audio the emulator left running (the real "background game")
+    try { (window._gostAudioCtxs || []).forEach(c => { try { c.close(); } catch (_) {} }); } catch (_) {}
+    window._gostAudioCtxs = [];
     window.EJS_emulator = null;
+    // drop the loader so the next launch starts from a clean slate
+    const loader = document.getElementById("ejs-loader"); if (loader) loader.remove();
     if (this.chip8) { this.chip8.stop(); this.chip8 = null; window.removeEventListener("keydown", this._c8key); window.removeEventListener("keyup", this._c8key); }
     const pad = $("#c8-pad"); if (pad) pad.remove();
     const host = $("#ejs-host"); if (host) host.innerHTML = "";
@@ -3885,10 +3936,6 @@ const Nav = {
           container: "nav-map", attributionControl: false, dragRotate: false,
           center: startCenter,
           zoom: startZoom,
-          // Keep the camera inside the downloaded region (small margin) so you
-          // can't pan off into blank world tiles (bailey: wasted rendering).
-          maxBounds: region ? [[region.minLon - 0.3, region.minLat - 0.3],
-                               [region.maxLon + 0.3, region.maxLat + 0.3]] : undefined,
           style: {
             version: 8,
             sources: { p: { type: "vector", url: `pmtiles://maps/${chosen}` } },
@@ -3929,10 +3976,12 @@ const Nav = {
           this.map.resize();
           if (region) {
             const rbnds = [[region.minLon, region.minLat], [region.maxLon, region.maxLat]];
-            // Lock zoom-out to the region extent (no zooming out to the world).
-            const cam = this.map.cameraForBounds(rbnds, { padding: 24 });
-            if (cam && isFinite(cam.zoom)) this.map.setMinZoom(Math.max(0, cam.zoom - 0.3));
-            if (!this.lastFix) this.map.fitBounds(rbnds, { padding: 24, duration: 0 });
+            // Only stop you zooming out to the whole planet -- keep ~2 levels of
+            // headroom so you can see the whole state + surroundings, and pan
+            // freely (no maxBounds). bailey: prior lock was too restrictive.
+            const cam = this.map.cameraForBounds(rbnds, { padding: 20 });
+            if (cam && isFinite(cam.zoom)) this.map.setMinZoom(Math.max(0, cam.zoom - 2));
+            if (!this.lastFix) this.map.fitBounds(rbnds, { padding: 20, duration: 0 });
           }
         };
         requestAnimationFrame(this._frameRegion);
