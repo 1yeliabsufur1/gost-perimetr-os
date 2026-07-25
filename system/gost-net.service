@@ -10,6 +10,11 @@ Wants=NetworkManager.service
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=-/usr/sbin/rfkill unblock wifi
+# Regulatory domain: with no country the kernel defaults to "00" (world),
+# which disables most channels -- the radio then can't scan or join and WiFi
+# looks dead (bailey: "wifi still having issues" 2026-07-24). Set it from
+# /etc/gost-wifi-country (default US) BEFORE bringing the radio up.
+ExecStart=-/bin/sh -c 'iw reg set "$(cat /etc/gost-wifi-country 2>/dev/null || echo US)"'
 ExecStart=-/usr/bin/nmcli radio wifi on
 ExecStart=-/usr/bin/nmcli networking on
 # Disable Wi-Fi power-save: the Pi's radio sleeps when idle and drops the

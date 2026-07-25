@@ -50,6 +50,16 @@ echo "$GOST_USER" > /etc/gost-user
 rfkill unblock wifi 2>/dev/null || true
 rfkill unblock bluetooth 2>/dev/null || true   # BT pairing UI + wireless OBD
 
+# Wi-Fi regulatory domain. WITHOUT a country the kernel regdom stays "00"
+# (world), most channels are disabled, and the radio can't scan/join -- the
+# single most common "wifi doesn't work" cause on a Pi. Set it persistently.
+# Override the default by exporting GOST_WIFI_COUNTRY, or edit
+# /etc/gost-wifi-country on the device (gost-net.service reads it every boot).
+WIFI_COUNTRY="${GOST_WIFI_COUNTRY:-US}"
+echo "$WIFI_COUNTRY" > /etc/gost-wifi-country
+raspi-config nonint do_wifi_country "$WIFI_COUNTRY" 2>/dev/null || true
+iw reg set "$WIFI_COUNTRY" 2>/dev/null || true
+
 # Chromium enterprise policy: the kiosk browser must never offer to save
 # passwords (the Wi-Fi PSK field triggered Chrome's "save password?" bubble
 # over the NAV tab -- bailey 2026-07-13). Policy beats flags: flags like

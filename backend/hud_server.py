@@ -2084,19 +2084,59 @@ class Dashcam:
 
 # --------------------------------------------------------------- wifi/pw ----
 
-async def wifi_scan():
+async def _wifi_radio_up():
+    """Clear soft-blocks, set the regulatory domain, and turn the radio on.
+    The kernel regdom defaults to "00" (world), which disables channels and
+    makes scans/joins fail -- setting the country is the real fix. Best-effort;
+    every step is allowed to fail (e.g. on a dev box with no wlan0)."""
     try:
+        with open("/etc/gost-wifi-country") as f:
+            country = (f.read().strip() or "US")
+    except Exception:
+        country = "US"
+    for cmd in (["rfkill", "unblock", "wifi"],
+                ["iw", "reg", "set", country],
+                ["nmcli", "radio", "wifi", "on"]):
+        try:
+            p = await asyncio.create_subprocess_exec(
+                *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+            await asyncio.wait_for(p.wait(), timeout=15)
+        except Exception:
+            pass
+
+
+async def wifi_scan():
+    await _wifi_radio_up()   # empty scan list usually = radio was never brought up
+    try:
+        # --rescan yes forces a fresh scan; the cache is empty right after the
+        # radio comes on, which is why the panel used to show "no networks".
         proc = await asyncio.create_subprocess_exec(
-            "nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY", "dev", "wifi", "list",
+            "nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY", "dev", "wifi", "list", "--rescan", "yes",
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        out, _ = await proc.communicate()
-        nets = []
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=25)
+        # nmcli -t escapes literal colons in a field as "\:"; split on unescaped
+        # colons only so SSIDs containing a colon parse correctly.
+        best = {}
         for line in out.decode(errors="ignore").splitlines():
-            parts = line.split(":")
-            if parts and parts[0]:
-                nets.append({"ssid": parts[0], "signal": parts[1] if len(parts) > 1 else "",
-                             "security": parts[2] if len(parts) > 2 else ""})
+            parts = re.split(r"(?<!\\):", line)
+            ssid = parts[0].replace("\\:", ":") if parts else ""
+            if not ssid:
+                continue
+            try:
+                sig = int(parts[1]) if len(parts) > 1 and parts[1] else 0
+            except ValueError:
+                sig = 0
+            sec = parts[2] if len(parts) > 2 else ""
+            # De-dupe: the same SSID appears once per BSS/band; keep the strongest.
+            if ssid not in best or sig > best[ssid]["_sig"]:
+                best[ssid] = {"ssid": ssid, "signal": str(sig), "security": sec, "_sig": sig}
+        nets = sorted(best.values(), key=lambda n: n["_sig"], reverse=True)
+        for n in nets:
+            n.pop("_sig", None)
         return nets
+    except asyncio.TimeoutError:
+        log("wifi scan timed out")
+        return []
     except Exception as e:
         log("wifi scan failed:", e)
         return []
@@ -2106,17 +2146,16 @@ async def wifi_join(ssid, psk):
     if not ssid:
         return {"ok": False, "detail": "no SSID"}
     try:
-        # Wi-Fi ships rfkill-soft-blocked and the radio may be off; clear both
-        # before connecting or nmcli fails with a useless generic error.
-        for cmd in (["rfkill", "unblock", "wifi"],
-                    ["nmcli", "radio", "wifi", "on"],
-                    ["nmcli", "dev", "wifi", "rescan"]):
-            try:
-                p = await asyncio.create_subprocess_exec(
-                    *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-                await asyncio.wait_for(p.wait(), timeout=15)
-            except Exception:
-                pass
+        # Radio may be soft-blocked / regdom unset / off; bring it fully up (incl.
+        # regulatory domain) or nmcli fails with a useless generic error.
+        await _wifi_radio_up()
+        try:
+            p = await asyncio.create_subprocess_exec(
+                "nmcli", "dev", "wifi", "rescan",
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+            await asyncio.wait_for(p.wait(), timeout=15)
+        except Exception:
+            pass
         args = ["nmcli", "dev", "wifi", "connect", ssid]
         if psk:
             args += ["password", psk]
