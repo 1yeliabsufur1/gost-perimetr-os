@@ -681,6 +681,7 @@ html[data-pointer="touch"], html[data-pointer="touch"] *,
             <button data-focus id="games-file-btn">[ LOAD ROM FILE ]</button>
             <button data-focus id="games-import-btn">[ IMPORT FROM USB ]</button>
             <button data-focus id="games-refresh-btn">[ RESCAN ROMS ]</button>
+            <button data-focus id="games-crt-btn">[ CRT: OFF ]</button>
             <span id="games-msg" class="dim" style="font-size:12px;"></span>
             <input type="file" id="games-file-input" style="display:none;"
                    accept=".ch8,.nes,.fds,.sfc,.smc,.gb,.gbc,.gba,.n64,.z64,.v64,.nds,.md,.gen,.smd,.sms,.gg,.32x,.pce,.ngp,.ws,.wsc,.a26,.a78,.lnx,.j64,.col,.d64,.zip,.iso,.cue,.bin,.chd,.pbp">
@@ -943,7 +944,7 @@ const LS = {
 /* ------------------------------- config ---------------------------------- */
 const Config = {
   data: Object.assign({
-    setup_done: false, source_mode: "AUTO", theme: "gost", guide3: {}, dashcam: false, channel_names: {}, brightness: 100, gbc: false, dr: false, touch: false,
+    setup_done: false, source_mode: "AUTO", theme: "gost", guide3: {}, dashcam: false, channel_names: {}, brightness: 100, gbc: false, dr: false, touch: false, crt: false,
   }, LS.get("config", {})),
   save() { LS.set("config", this.data); },
   set(key, value, fromRemote) {
@@ -2040,10 +2041,10 @@ const Games = {
     window.EJS_startOnLoaded = true;
     window.EJS_threads = false;
     window.EJS_disableAutoLang = false;   // skip the localization fetch (English UI)
-    // RetroArch-style CRT look out of the box (shader is embedded in the build,
-    // so it works offline). Change/disable it in the emulator's own settings
-    // menu -- heavy cores (N64/PSX) may want it off for speed.
-    window.EJS_defaultOptions = Object.assign({ shader: Config.data.crt === false ? "disabled" : "crt-easymode.glslp" }, window.EJS_defaultOptions || {});
+    // Optional RetroArch-style CRT look (shader embedded, works offline). OFF by
+    // default because the CRT presets cost ~15fps on the Pi; toggle it on with
+    // the CRT button. crt-aperture is the lightest of the embedded presets.
+    if (Config.data.crt) window.EJS_defaultOptions = Object.assign({ shader: "crt-aperture.glslp" }, window.EJS_defaultOptions || {});
     try { window.EJS_color = getComputedStyle(document.documentElement).getPropertyValue("--pri").trim() || "#ffb000"; } catch (e) {}
     $("#ejs-title").textContent = name || "";
     $("#ejs-overlay").classList.remove("hidden");
@@ -2135,6 +2136,15 @@ const Games = {
 $("#games-refresh-btn") && $("#games-refresh-btn").addEventListener("click", () => Games.activate());
 $("#games-import-btn") && $("#games-import-btn").addEventListener("click", () => Games.importUsb());
 $("#games-file-btn") && $("#games-file-btn").addEventListener("click", () => Games.pickFile());
+(function () {
+  const b = $("#games-crt-btn"); if (!b) return;
+  const lbl = () => { b.textContent = Config.data.crt ? "[ CRT: ON ]" : "[ CRT: OFF ]"; };
+  lbl();
+  b.addEventListener("click", () => {
+    Config.set("crt", !Config.data.crt); lbl();
+    $("#games-msg").textContent = "CRT " + (Config.data.crt ? "on -- costs some FPS" : "off -- full speed") + " (applies next time you launch a game)";
+  });
+})();
 $("#games-file-input") && $("#games-file-input").addEventListener("change", (e) => { if (e.target.files[0]) Games.playFile(e.target.files[0]); e.target.value = ""; });
 $("#ejs-close") && $("#ejs-close").addEventListener("click", () => Games.stopEJS());
 
