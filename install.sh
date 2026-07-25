@@ -60,6 +60,26 @@ echo "$WIFI_COUNTRY" > /etc/gost-wifi-country
 raspi-config nonint do_wifi_country "$WIFI_COUNTRY" 2>/dev/null || true
 iw reg set "$WIFI_COUNTRY" 2>/dev/null || true
 
+# Deploy key: if the image ships a public key, authorize it for the operator so
+# a maintainer can SSH in without a password. Not committed to the repo -- an
+# image builder drops deploy-key.pub beside install.sh (or a *.pub in the boot
+# partition) to enable it. Harmless/no-op when no key is baked.
+for KEYSRC in "$SRC_DIR/deploy-key.pub" /opt/gost/deploy-key.pub \
+              /boot/firmware/gost-authorized-key.pub /boot/gost-authorized-key.pub; do
+  [ -f "$KEYSRC" ] || continue
+  UHOME="$(getent passwd "$GOST_USER" | cut -d: -f6)"
+  [ -n "$UHOME" ] || continue
+  install -d -m700 -o "$GOST_USER" -g "$GOST_USER" "$UHOME/.ssh"
+  touch "$UHOME/.ssh/authorized_keys"
+  grep -qxFf "$KEYSRC" "$UHOME/.ssh/authorized_keys" 2>/dev/null || cat "$KEYSRC" >> "$UHOME/.ssh/authorized_keys"
+  chown "$GOST_USER":"$GOST_USER" "$UHOME/.ssh/authorized_keys"
+  chmod 600 "$UHOME/.ssh/authorized_keys"
+  log "authorized deploy key ($KEYSRC) for $GOST_USER"
+  break
+done
+# Belt-and-suspenders: the image ships /boot/ssh, but make sure sshd is enabled.
+systemctl enable ssh 2>/dev/null || systemctl enable sshd 2>/dev/null || true
+
 # Chromium enterprise policy: the kiosk browser must never offer to save
 # passwords (the Wi-Fi PSK field triggered Chrome's "save password?" bubble
 # over the NAV tab -- bailey 2026-07-13). Policy beats flags: flags like
