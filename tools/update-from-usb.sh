@@ -55,6 +55,22 @@ if [ -f /opt/gost/system/hud-backend.service ]; then
   systemctl daemon-reload
 fi
 
+# Wi-Fi radio service + regulatory domain. gost-net.service lives in
+# /etc/systemd/system (not /opt), so re-install it here or a WiFi-country fix
+# shipped in the update never reaches boot. Also make sure the country file it
+# reads exists, and apply the regdom now so WiFi works this session too.
+if [ -f /opt/gost/system/gost-net.service ]; then
+  install -m0644 /opt/gost/system/gost-net.service /etc/systemd/system/gost-net.service
+  systemctl daemon-reload
+  systemctl enable gost-net.service 2>/dev/null || true
+fi
+[ -f /etc/gost-wifi-country ] || echo "${GOST_WIFI_COUNTRY:-US}" > /etc/gost-wifi-country
+WIFI_COUNTRY="$(cat /etc/gost-wifi-country 2>/dev/null || echo US)"
+raspi-config nonint do_wifi_country "$WIFI_COUNTRY" 2>/dev/null || true
+iw reg set "$WIFI_COUNTRY" 2>/dev/null || true
+rfkill unblock wifi 2>/dev/null || true
+nmcli radio wifi on 2>/dev/null || true
+
 log "restarting services..."
 systemctl restart hud-backend
 systemctl restart hud-kiosk
