@@ -60,6 +60,15 @@ echo "$WIFI_COUNTRY" > /etc/gost-wifi-country
 raspi-config nonint do_wifi_country "$WIFI_COUNTRY" 2>/dev/null || true
 iw reg set "$WIFI_COUNTRY" 2>/dev/null || true
 
+# Pi OS ships the default account with shell /usr/sbin/nologin (a placeholder
+# meant to be "renamed" on first boot). We reuse it as the operator, so give it
+# a real login shell or SSH is refused even with a valid key (bailey 2026-07-25:
+# "Permission denied" over SSH though the kiosk ran fine).
+CUR_SHELL="$(getent passwd "$GOST_USER" | cut -d: -f7)"
+case "$CUR_SHELL" in
+  */nologin|*/false|"") usermod -s /bin/bash "$GOST_USER" && log "gave $GOST_USER a login shell (was ${CUR_SHELL:-none})" ;;
+esac
+
 # Deploy key: if the image ships a public key, authorize it for the operator so
 # a maintainer can SSH in without a password. Not committed to the repo -- an
 # image builder drops deploy-key.pub beside install.sh (or a *.pub in the boot
