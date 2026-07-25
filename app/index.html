@@ -1979,9 +1979,21 @@ const Games = {
     ".ws": "ws", ".wsc": "ws", ".a26": "atari2600", ".a78": "atari7800", ".lnx": "lynx", ".j64": "jaguar",
     ".col": "coleco", ".d64": "vice_x64", ".zip": "arcade", ".iso": "psx", ".cue": "psx", ".bin": "psx", ".chd": "psx", ".pbp": "psx",
   },
+  // Disc formats for consoles with NO in-browser core (Wii/GameCube via
+  // .nkit.iso/.wbfs/.rvz/.gcm, PSP via .cso, Xbox via .xbe/.iso-x, WiiU). These
+  // used to fall through to the psx core and hang the whole UI (bailey's Animal
+  // Crossing Wii disc). Detect + refuse with a clear message instead.
+  UNSUPPORTED_RE: /\.(nkit\.iso|wbfs|rvz|gcm|gcz|wad|wux|wud|cso|xbe|xex)$/i,
+  unsupported(name) { return this.UNSUPPORTED_RE.test(name || ""); },
+  unsupportedMsg(name) {
+    return (name || "this game").split(/[\\/]/).pop() +
+      " needs a console with no in-browser core (Wii / GameCube / PSP / Xbox) -- not playable here.";
+  },
   // Play a device ROM (from the backend list) in the in-browser emulator
   launch(g) {
-    const ext = "." + (g.path || g.name || "").split(".").pop().toLowerCase();
+    const name = g.path || g.name || "";
+    if (this.unsupported(name)) { $("#games-msg").textContent = this.unsupportedMsg(name); return; }
+    const ext = "." + name.split(".").pop().toLowerCase();
     const core = this.EJS_BY_SYSTEM[g.system] || this.EJS_BY_EXT[ext];
     if (!core) { $("#games-msg").textContent = "no in-browser core for " + (g.system || ext); return; }
     const base = "http://" + (location.hostname || "127.0.0.1") + ":8766";
@@ -1991,6 +2003,7 @@ const Games = {
   pickFile() { $("#games-file-input").click(); },
   playFile(file) {
     if (!file) return;
+    if (this.unsupported(file.name)) { $("#games-msg").textContent = this.unsupportedMsg(file.name); return; }
     const ext = "." + file.name.split(".").pop().toLowerCase();
     const name = file.name.replace(/\.[^.]+$/, "");
     if (ext === ".ch8") { file.arrayBuffer().then(b => this.playChip8(new Uint8Array(b), name)); return; }
@@ -1999,7 +2012,7 @@ const Games = {
     this.launchEJS(core, URL.createObjectURL(file), name);
   },
   // cores bundled offline in app/vendor; everything else streams from the CDN
-  BUNDLED_CORES: new Set(["gb", "gba", "nes", "snes", "segaMD"]),
+  BUNDLED_CORES: new Set(["gb", "gba", "nes", "snes", "segaMD", "n64", "psx", "pce"]),
   launchEJS(core, url, name) {
     this.stopEJS();
     // Track audio contexts EmulatorJS creates so stopEJS can silence them --
@@ -2027,6 +2040,10 @@ const Games = {
     window.EJS_startOnLoaded = true;
     window.EJS_threads = false;
     window.EJS_disableAutoLang = false;   // skip the localization fetch (English UI)
+    // RetroArch-style CRT look out of the box (shader is embedded in the build,
+    // so it works offline). Change/disable it in the emulator's own settings
+    // menu -- heavy cores (N64/PSX) may want it off for speed.
+    window.EJS_defaultOptions = Object.assign({ shader: Config.data.crt === false ? "disabled" : "crt-easymode.glslp" }, window.EJS_defaultOptions || {});
     try { window.EJS_color = getComputedStyle(document.documentElement).getPropertyValue("--pri").trim() || "#ffb000"; } catch (e) {}
     $("#ejs-title").textContent = name || "";
     $("#ejs-overlay").classList.remove("hidden");
