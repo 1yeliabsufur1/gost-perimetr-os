@@ -510,6 +510,19 @@ a { color: var(--pri); }
 #modal { position: fixed; inset: 0; z-index: 600; display:flex; align-items:center; justify-content:center; background: rgba(0,0,0,0.75); }
 #modal .frame { background: var(--bg); width: min(520px, 90vw); max-height: 80vh; overflow:auto; margin:0; }
 #modal-body input[type="text"], #modal-body input[type="password"] { display:block; width: 100%; margin: 4px 0 10px; }
+/* show/hide password toggle row -- touch-friendly button beside the field */
+.pw-row { display:flex; gap:6px; align-items:stretch; margin:4px 0 10px; }
+.pw-row input[type="password"], .pw-row input[type="text"] { flex:1 1 auto; width:auto; margin:0 !important; }
+.pw-toggle { flex:0 0 auto; padding:0 14px; min-height:44px; font-size:13px; letter-spacing:1px; white-space:nowrap; }
+/* TOUCH MODE (Settings -> TOUCH) -- fatter tap targets + spacing for finger
+ * use on the 7" panel. Toggled via [data-touch] on <html>, like the themes. */
+[data-touch] button, [data-touch] select, [data-touch] .tv-chan-row,
+[data-touch] input[type="text"], [data-touch] input[type="password"] { min-height:48px; }
+[data-touch] button, [data-touch] .tv-chan-row { padding:12px 16px; }
+[data-touch] input[type="text"], [data-touch] input[type="password"] { padding:10px 12px; font-size:16px; }
+[data-touch] .tab, [data-touch] .navbtn, [data-touch] [role="tab"] { padding:16px 12px; }
+[data-touch] .pw-toggle { min-height:48px; }
+[data-touch] .c8-key { min-height:60px; font-size:22px; }
 </style>
 </head>
 <body>
@@ -909,7 +922,7 @@ const LS = {
 /* ------------------------------- config ---------------------------------- */
 const Config = {
   data: Object.assign({
-    setup_done: false, source_mode: "AUTO", theme: "gost", guide3: {}, dashcam: false, channel_names: {}, brightness: 100, gbc: false, dr: false,
+    setup_done: false, source_mode: "AUTO", theme: "gost", guide3: {}, dashcam: false, channel_names: {}, brightness: 100, gbc: false, dr: false, touch: false,
   }, LS.get("config", {})),
   save() { LS.set("config", this.data); },
   set(key, value, fromRemote) {
@@ -917,8 +930,12 @@ const Config = {
     this.save();
     if (!fromRemote && Net.connected) Net.send({ type: "config.set", key, value });
     if (key === "theme" || key === "gbc" || key === "dr") applyTheme(this.data.theme);
+    if (key === "touch") applyTouch(value);
   },
 };
+
+/* Touch mode: enlarge tap targets for the 7" touchscreen (data-touch on <html>). */
+function applyTouch(on) { document.documentElement.toggleAttribute("data-touch", !!on); }
 
 function applyTheme(id) {
   const root = document.documentElement;
@@ -1412,6 +1429,7 @@ const Maps = {
 
 function onConfigSynced() {
   applyTheme(Config.data.theme || "gost");
+  applyTouch(Config.data.touch);
   $("#src-label").textContent = srcModeLabel(Config.data.source_mode);
 }
 
@@ -1518,12 +1536,39 @@ function universalBack() {
 /* ============================================================================
  * MODAL -- generic focused overlay panel (Wi-Fi, etc.), reuses the .frame look.
  * ========================================================================== */
+/* Add a SHOW/HIDE toggle after every password field in `root` so anything
+ * that asks for a password (Wi-Fi PSK, operator password, ...) can be revealed
+ * -- important on a touchscreen where mistyped hidden passwords are common.
+ * Idempotent: marks fields so re-running never double-adds a button. */
+function enhancePasswordFields(root) {
+  const scope = root || document;
+  $all('input[type="password"]:not([data-pw-enhanced])', scope).forEach((inp) => {
+    inp.setAttribute("data-pw-enhanced", "1");
+    const btn = el("button", { type: "button", class: "pw-toggle", "data-focus": "", "aria-label": "Show password" }, ["SHOW"]);
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      const hidden = inp.getAttribute("type") === "password";
+      inp.setAttribute("type", hidden ? "text" : "password");
+      btn.textContent = hidden ? "HIDE" : "SHOW";
+    });
+    // Wrap input+button in a flex row so the toggle sits beside the field
+    // consistently in every context (modal, wizard).
+    if (inp.parentNode) {
+      const row = el("div", { class: "pw-row" });
+      inp.parentNode.insertBefore(row, inp);
+      row.appendChild(inp);
+      row.appendChild(btn);
+    }
+  });
+}
+
 const Modal = {
   open(title, buildFn) {
     $("#modal-frame").setAttribute("data-title", title);
     const body = $("#modal-body");
     body.innerHTML = "";
     buildFn(body);
+    enhancePasswordFields(body);   // every modal password field gets a SHOW toggle
     $("#modal").classList.remove("hidden");
     setTimeout(() => { const f = focusables()[0]; if (f) f.focus(); }, 0);
   },
@@ -1613,6 +1658,7 @@ const Wizard = {
       const btn = el("button", { "data-focus": "", onclick: () => this.submitPassword() }, ["[ CONTINUE ]"]);
       body.appendChild(el("div", { class: "line" }, [p1]));
       body.appendChild(el("div", { class: "line" }, [p2]));
+      enhancePasswordFields(body);   // SHOW/HIDE toggles on both password fields
       body.appendChild(err);
       body.appendChild(el("div", { class: "line" }, [btn]));
       // Enter advances field-to-field (uname -> pw -> confirm -> submit),
@@ -4009,6 +4055,11 @@ function buildSettings() {
   const drToggle = el("button", { "data-focus": "", id: "dr-toggle", style: "margin-top:10px; display:" + (Config.data.theme === "undertale" ? "" : "none") }, [drLabel()]);
   drToggle.addEventListener("click", () => { Config.set("dr", !Config.data.dr); drToggle.textContent = drLabel(); });
   swatches.parentElement.appendChild(drToggle);
+  // Touch mode -- always available; enlarges buttons/inputs for the 7" panel.
+  const touchLabel = () => Config.data.touch ? "[ TOUCH MODE: ON → tap to shrink ]" : "[ TOUCH MODE: OFF → tap for big buttons ]";
+  const touchToggle = el("button", { "data-focus": "", id: "touch-toggle", style: "margin-top:10px" }, [touchLabel()]);
+  touchToggle.addEventListener("click", () => { Config.set("touch", !Config.data.touch); touchToggle.textContent = touchLabel(); });
+  swatches.parentElement.appendChild(touchToggle);
   $("#src-auto-btn").addEventListener("click", () => setSourceMode("AUTO"));
   $("#src-demo-btn").addEventListener("click", () => setSourceMode("DEMO"));
   const setVeh = (key, val) => {
