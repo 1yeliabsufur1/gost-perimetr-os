@@ -3782,17 +3782,31 @@ const Nav = {
       if (window.pmtiles && window.maplibregl) {
         const protocol = new pmtiles.Protocol();
         maplibregl.addProtocol("pmtiles", protocol.tile);
+        // Read the region's bounds from the pmtiles header so we can frame it
+        // when there's no GPS fix yet. Without this the map sat at [0,0] zoom 2
+        // (the ocean off Africa) while the downloaded data was elsewhere --
+        // "the map isn't a map of anything" (bailey 2026-07-25, no GPS fix).
+        let region = null;
+        try {
+          const pm = new pmtiles.PMTiles(`maps/${chosen}`);
+          const h = await pm.getHeader();
+          if (h && isFinite(h.minLon) && isFinite(h.maxLon) && (h.maxLon - h.minLon) > 0) region = h;
+        } catch (e) { /* header unreadable -> fall back to world view */ }
         const css = getComputedStyle(document.documentElement);
         const C = { bg: css.getPropertyValue("--bg").trim(), line: css.getPropertyValue("--line").trim(),
           pri: css.getPropertyValue("--pri").trim(), dim: css.getPropertyValue("--dim").trim() };
+        const startCenter = this.lastFix ? [this.lastFix.lon, this.lastFix.lat]
+          : region ? [(region.minLon + region.maxLon) / 2, (region.minLat + region.maxLat) / 2]
+          : [0, 0];
+        const startZoom = this.lastFix ? 12 : region ? 6 : 2;
         // Protomaps basemap schema (earth/water/landuse/buildings/roads/boundaries) --
         // this is the layer convention used by the free extracts at
         // protomaps.com/downloads, so any region file downloaded from there
         // renders correctly without guessing at a vendor-specific schema.
         this.map = new maplibregl.Map({
           container: "nav-map", attributionControl: false, dragRotate: false,
-          center: this.lastFix ? [this.lastFix.lon, this.lastFix.lat] : [0, 0],
-          zoom: this.lastFix ? 12 : 2,
+          center: startCenter,
+          zoom: startZoom,
           style: {
             version: 8,
             sources: { p: { type: "vector", url: `pmtiles://maps/${chosen}` } },
@@ -3823,6 +3837,12 @@ const Nav = {
         $("#nav-fallback").classList.add("hidden");
         $("#nav-hud").classList.remove("hidden");
         this.updateMapPickerBtn();
+        // No GPS fix -> frame the whole downloaded region so the user sees
+        // their map immediately (the puck takes over once a fix arrives).
+        if (!this.lastFix && region) {
+          this.map.fitBounds([[region.minLon, region.minLat], [region.maxLon, region.maxLat]],
+            { padding: 24, duration: 0 });
+        }
       } else {
         this.showFallback("MAP LIBRARY FAILED TO LOAD");
       }
