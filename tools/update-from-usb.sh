@@ -11,16 +11,29 @@ set -uo pipefail
 if [ "$(id -u)" -ne 0 ]; then echo "run with sudo"; exit 1; fi
 log(){ echo "[gost-update] $*"; }
 
-# Find a source dir on any mounted removable media that contains our tree.
+# An explicit source dir may be passed as $1 (e.g. code pushed over SSH into
+# /tmp): `sudo update-from-usb.sh /tmp/gost-update`. Otherwise scan USB media.
 SRC=""
-for base in /media/*/* /media/* /mnt/* /run/media/*/*; do
-  [ -d "$base" ] || continue
-  for cand in "$base/gost-update" "$base"; do
+if [ -n "${1:-}" ]; then
+  for cand in "$1" "$1/gost-update"; do
     if [ -f "$cand/backend/hud_server.py" ] && [ -f "$cand/app/index.html" ]; then
-      SRC="$cand"; break 2
+      SRC="$cand"; break
     fi
   done
-done
+  [ -z "$SRC" ] && log "given path '$1' has no app/+backend/ -- falling back to USB scan"
+fi
+
+# Find a source dir on any mounted removable media that contains our tree.
+if [ -z "$SRC" ]; then
+  for base in /media/*/* /media/* /mnt/* /run/media/*/*; do
+    [ -d "$base" ] || continue
+    for cand in "$base/gost-update" "$base"; do
+      if [ -f "$cand/backend/hud_server.py" ] && [ -f "$cand/app/index.html" ]; then
+        SRC="$cand"; break 2
+      fi
+    done
+  done
+fi
 
 if [ -z "$SRC" ]; then
   log "No update source found. Put app/ backend/ system/ (or a 'gost-update'"
