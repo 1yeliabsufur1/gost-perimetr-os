@@ -2527,8 +2527,38 @@ async def ssh_status():
         return {"enabled": False}
 
 
+async def geocode(query, near=None):
+    """Turn a typed address/place into coordinates via OpenStreetMap Nominatim
+    (online). Lets NAV set a start/destination by name (bailey: no way to enter
+    an address). Biased toward the current map area when `near` is given."""
+    if not query or not str(query).strip():
+        return {"ok": False, "results": [], "detail": "empty query"}
+
+    def _q():
+        params = {"q": str(query), "format": "jsonv2", "limit": "6"}
+        if near and len(near) == 2:
+            lon, lat = float(near[0]), float(near[1])
+            params["viewbox"] = "%f,%f,%f,%f" % (lon - 2, lat + 2, lon + 2, lat - 2)
+        url = "https://nominatim.openstreetmap.org/search?" + urlencode(params)
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "gost-perimetr-os/1.0 (car head unit)", "Accept-Language": "en"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return json.load(r)
+
+    try:
+        data = await asyncio.get_event_loop().run_in_executor(None, _q)
+        results = [{"name": d.get("display_name", ""),
+                    "lat": float(d["lat"]), "lon": float(d["lon"])}
+                   for d in data if d.get("lat") and d.get("lon")]
+        return {"ok": True, "results": results[:6]}
+    except Exception as e:
+        return {"ok": False, "results": [], "detail": "geocode failed: " + str(e)[:180]}
+
+
 def system_info():
-    info = {"version": "3.0.0", "hostname": socket.gethostname()}
+    # Single source of truth: the VERSION file, same value the update check
+    # compares against GitHub (bailey: ABOUT said 3.0.0 but updates said 1.1.0).
+    info = {"version": _current_version(), "hostname": socket.gethostname()}
     try:
         with open("/proc/uptime") as f:
             info["uptime_sec"] = float(f.read().split()[0])
@@ -3086,6 +3116,8 @@ async def route_message(state: GostState, ws, msg):
         await ws.send(json.dumps({"type": "ssh.status", **await ssh_status()}))
     elif t == "ssh.set":
         await ws.send(json.dumps({"type": "ssh.set", **await ssh_set(bool(msg.get("on")))}))
+    elif t == "geocode":
+        await ws.send(json.dumps({"type": "geocode", **await geocode(msg.get("q"), msg.get("near"))}))
     elif t == "system.info":
         await ws.send(json.dumps({"type": "system.info", **system_info()}))
 
@@ -3144,6 +3176,24 @@ def guess_mime(path: Path):
     return MIME_TYPES.get(path.suffix.lower(), "application/octet-stream")
 
 
+def _pmtiles_bounds(path):
+    """Read [minLon,minLat,maxLon,maxLat] straight from the pmtiles v3 header
+    (int32 E7 at bytes 102..118). Server-side so the map framing never depends
+    on fragile in-browser header parsing (bailey: map showed the whole world)."""
+    try:
+        with open(path, "rb") as f:
+            hdr = f.read(127)
+        if len(hdr) < 118 or hdr[:7] != b"PMTiles":
+            return None
+        v = lambda o: int.from_bytes(hdr[o:o + 4], "little", signed=True) / 1e7
+        b = [v(102), v(106), v(110), v(114)]
+        if b[2] > b[0] and b[3] > b[1]:
+            return b
+    except Exception:
+        pass
+    return None
+
+
 def resolve_fs_path(url_path: str):
     clean = unquote(urlsplit(url_path).path)
     if clean == "/":
@@ -3175,7 +3225,12 @@ async def _write_status(writer, code, reason, body=b""):
 async def serve_file(writer, url_path, headers, method):
     if urlsplit(url_path).path == "/api/maps":
         files = [p.name for p in MAPS_DIR.glob("*.pmtiles")] if MAPS_DIR.is_dir() else []
-        body = json.dumps({"maps": files}).encode()
+        bounds = {}
+        for name in files:
+            b = _pmtiles_bounds(MAPS_DIR / name)
+            if b:
+                bounds[name] = b
+        body = json.dumps({"maps": files, "bounds": bounds}).encode()
         writer.write(
             b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
             + str(len(body)).encode() + b"\r\nConnection: close\r\n\r\n" + body

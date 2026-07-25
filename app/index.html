@@ -691,6 +691,10 @@ a { color: var(--pri); }
         <div id="nav-map" class="hidden"></div>
         <div id="nav-crosshair" class="hidden">+</div>
         <div id="nav-hud" class="hidden">
+          <div id="nav-search-row" style="display:flex; gap:6px; margin-bottom:6px;">
+            <input id="nav-search-input" data-focus placeholder="search address or place..." style="flex:1; min-width:0;" autocomplete="off" spellcheck="false">
+            <button data-focus id="nav-search-btn">[ SEARCH ]</button>
+          </div>
           <button data-focus id="nav-map-mode-btn">[ MAP MODE ]</button>
           <button data-focus id="nav-set-dest-btn">[ SET DESTINATION ]</button>
           <button data-focus id="nav-maps-btn" style="display:none">[ MAPS ]</button>
@@ -794,6 +798,7 @@ a { color: var(--pri); }
         <div class="frame" data-title="WI-FI">
           <div class="settings-row">
             <button data-focus id="wifi-scan-btn">[ ADD / MANAGE WI-FI ]</button>
+            <span id="wifi-conn-label" class="dim"></span>
           </div>
         </div>
         <div class="frame" data-title="SYSTEM CLOCK">
@@ -1284,8 +1289,13 @@ const Net = {
     else if (msg.type === "update.check") { Sys.onUpdateCheck(msg); }
     else if (msg.type === "update.apply") { Sys.onUpdateApply(msg); }
     else if (msg.type === "update.progress") { Sys.onUpdateProgress(msg); }
-    else if (msg.type === "wifi.status") { Net.wifiOnline = !!msg.online; Net.wifiSsid = msg.ssid || null; updateConnIndicator(); }
+    else if (msg.type === "wifi.status") {
+      Net.wifiOnline = !!msg.online; Net.wifiSsid = msg.ssid || null; updateConnIndicator();
+      const wl = $("#wifi-conn-label");
+      if (wl) wl.textContent = msg.online ? ("CONNECTED: " + (msg.ssid || "(wi-fi)")) : "NOT CONNECTED";
+    }
     else if (msg.type === "ssh.status" || msg.type === "ssh.set") { Sys.onSshStatus(msg); }
+    else if (msg.type === "geocode") { Nav.onGeocode(msg); }
     else if (msg.type === "clock.set") { $("#clock-set-result").textContent = msg.ok ? "CLOCK SET" : "FAILED -- CHECK DEVICE LOGS"; }
     else if (msg.type === "system.info") { renderAbout(msg); }
     else if (msg.type === "youtube.results") { YT.onResults(msg); }
@@ -3837,7 +3847,7 @@ const Nav = {
     let maps = [];
     try {
       const resp = await fetch("/api/maps");
-      if (resp.ok) maps = (await resp.json()).maps || [];
+      if (resp.ok) { const j = await resp.json(); maps = j.maps || []; this._mapBounds = j.bounds || {}; }
     } catch (e) { /* no backend -- standalone/demo */ }
     this.availableMaps = maps;
     this.updateMapPickerBtn();
@@ -3854,16 +3864,12 @@ const Nav = {
       if (window.pmtiles && window.maplibregl) {
         const protocol = new pmtiles.Protocol();
         maplibregl.addProtocol("pmtiles", protocol.tile);
-        // Read the region's bounds from the pmtiles header so we can frame it
-        // when there's no GPS fix yet. Without this the map sat at [0,0] zoom 2
-        // (the ocean off Africa) while the downloaded data was elsewhere --
-        // "the map isn't a map of anything" (bailey 2026-07-25, no GPS fix).
-        let region = null;
-        try {
-          const pm = new pmtiles.PMTiles(`maps/${chosen}`);
-          const h = await pm.getHeader();
-          if (h && isFinite(h.minLon) && isFinite(h.maxLon) && (h.maxLon - h.minLon) > 0) region = h;
-        } catch (e) { /* header unreadable -> fall back to world view */ }
+        // Region bounds come from the backend (/api/maps reads the pmtiles
+        // header server-side) -- reliable, unlike in-browser header parsing
+        // which silently failed and left the map on the whole world.
+        const rb = (this._mapBounds || {})[chosen];
+        const region = (rb && rb.length === 4 && rb[2] > rb[0] && rb[3] > rb[1])
+          ? { minLon: rb[0], minLat: rb[1], maxLon: rb[2], maxLat: rb[3] } : null;
         const css = getComputedStyle(document.documentElement);
         const C = { bg: css.getPropertyValue("--bg").trim(), line: css.getPropertyValue("--line").trim(),
           pri: css.getPropertyValue("--pri").trim(), dim: css.getPropertyValue("--dim").trim() };
@@ -3879,6 +3885,10 @@ const Nav = {
           container: "nav-map", attributionControl: false, dragRotate: false,
           center: startCenter,
           zoom: startZoom,
+          // Keep the camera inside the downloaded region (small margin) so you
+          // can't pan off into blank world tiles (bailey: wasted rendering).
+          maxBounds: region ? [[region.minLon - 0.3, region.minLat - 0.3],
+                               [region.maxLon + 0.3, region.maxLat + 0.3]] : undefined,
           style: {
             version: 8,
             sources: { p: { type: "vector", url: `pmtiles://maps/${chosen}` } },
@@ -3917,9 +3927,13 @@ const Nav = {
         this._frameRegion = () => {
           if (!this.map) return;
           this.map.resize();
-          if (!this.lastFix && region) this.map.fitBounds(
-            [[region.minLon, region.minLat], [region.maxLon, region.maxLat]],
-            { padding: 24, duration: 0 });
+          if (region) {
+            const rbnds = [[region.minLon, region.minLat], [region.maxLon, region.maxLat]];
+            // Lock zoom-out to the region extent (no zooming out to the world).
+            const cam = this.map.cameraForBounds(rbnds, { padding: 24 });
+            if (cam && isFinite(cam.zoom)) this.map.setMinZoom(Math.max(0, cam.zoom - 0.3));
+            if (!this.lastFix) this.map.fitBounds(rbnds, { padding: 24, duration: 0 });
+          }
         };
         requestAnimationFrame(this._frameRegion);
         setTimeout(this._frameRegion, 300);
@@ -4016,9 +4030,66 @@ const Nav = {
       .setLngLat([lng, lat]).addTo(this.map);
     this.computeRoute();
   },
+  /* ---- address search (geocoding) -> set a start or destination by name ---- */
+  searchAddress() {
+    const q = ($("#nav-search-input").value || "").trim();
+    if (!q) return;
+    if (!Net.connected) { this.showTurnBanner("SEARCH NEEDS THE DEVICE + INTERNET"); return; }
+    this.showTurnBanner("SEARCHING: " + q + " ...");
+    const c = this.map ? this.map.getCenter() : null;
+    Net.send({ type: "geocode", q, near: c ? [c.lng, c.lat] : null });
+  },
+  onGeocode(msg) {
+    $("#nav-turn-banner").classList.add("hidden");
+    Modal.open("SEARCH RESULTS", (body) => {
+      if (!msg.ok || !msg.results || !msg.results.length) {
+        body.appendChild(el("div", { class: "dim", style: "margin-bottom:8px;" },
+          [msg.ok ? "No matches found." : ("Search failed: " + (msg.detail || "no internet?"))]));
+      } else {
+        const inR = (r) => !this._regionBounds() ||
+          (r.lon >= this._regionBounds()[0] && r.lon <= this._regionBounds()[2] &&
+           r.lat >= this._regionBounds()[1] && r.lat <= this._regionBounds()[3]);
+        msg.results.forEach((r) => {
+          const outside = !inR(r);
+          const row = el("div", { style: "margin:4px 0 8px; border-bottom:1px solid var(--line); padding-bottom:8px;" });
+          row.appendChild(el("div", { style: "font-size:12px; margin-bottom:4px;" },
+            [(outside ? "⚠ outside downloaded map -- " : "") + r.name]));
+          const s = el("button", { "data-focus": "" }, ["[ SET START ]"]);
+          const d = el("button", { "data-focus": "", style: "margin-left:6px;" }, ["[ SET DESTINATION ]"]);
+          s.addEventListener("click", () => { Modal.close(); this.setStart(r.lon, r.lat); });
+          d.addEventListener("click", () => { Modal.close(); this.gotoDestination(r.lon, r.lat); });
+          row.appendChild(s); row.appendChild(d);
+          body.appendChild(row);
+        });
+      }
+      const c = el("button", { "data-focus": "", style: "margin-top:8px;" }, ["[ CLOSE ]"]);
+      c.addEventListener("click", () => Modal.close());
+      body.appendChild(c);
+    });
+  },
+  _regionBounds() { return (this._mapBounds || {})[this.currentMap] || null; },
+  setStart(lng, lat) {
+    if (!this.map) return;
+    this.startOverride = [lng, lat];
+    if (this.startMarker) this.startMarker.remove();
+    this.startMarker = new maplibregl.Marker({ color: getComputedStyle(document.documentElement).getPropertyValue("--glow") || "#4fe38a" })
+      .setLngLat([lng, lat]).addTo(this.map);
+    this.map.easeTo({ center: [lng, lat], zoom: Math.max(this.map.getZoom(), 12), duration: 500 });
+    this.showTurnBanner("START SET -- now set a destination");
+    if (this.destLngLat) this.computeRoute();
+  },
+  gotoDestination(lng, lat) {
+    if (!this.map) return;
+    this.map.easeTo({ center: [lng, lat], zoom: Math.max(this.map.getZoom(), 12), duration: 500 });
+    this.setDestination(lng, lat);
+  },
   computeRoute() {
     if (!this.map || !this.destLngLat) return;
-    const start = this.lastFix ? [this.lastFix.lon, this.lastFix.lat] : [this.map.getCenter().lng, this.map.getCenter().lat];
+    // Start: an address-searched start point if set, else the GPS fix, else the
+    // map centre (lets you plan a route in the office with no GPS -- bailey).
+    const start = this.startOverride ? this.startOverride
+      : this.lastFix ? [this.lastFix.lon, this.lastFix.lat]
+      : [this.map.getCenter().lng, this.map.getCenter().lat];
     const graph = buildRoadGraph(this.map.querySourceFeatures("p", { sourceLayer: "roads" }));
     if (!graph.nodeCount) {
       this.showTurnBanner("NO ROAD DATA IN VIEW -- PAN/ZOOM SO THE ROUTE AREA IS LOADED, THEN SET DESTINATION AGAIN");
@@ -4086,7 +4157,9 @@ const Nav = {
   },
   clearRoute() {
     this.destLngLat = null; this.routeCoords = null; this.routeEdges = null; this.turnByTurn = [];
+    this.startOverride = null;
     if (this.destMarker) { this.destMarker.remove(); this.destMarker = null; }
+    if (this.startMarker) { this.startMarker.remove(); this.startMarker = null; }
     if (this.map && this.map.getLayer && this.map.getLayer("route-line")) {
       this.map.removeLayer("route-line");
       this.map.removeSource("route");
@@ -4442,6 +4515,8 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#nav-map-mode-btn").addEventListener("click", () => Nav.toggleMapMode());
   $("#nav-set-dest-btn").addEventListener("click", () => Nav.toggleDestMode());
   $("#nav-maps-btn").addEventListener("click", () => Nav.showMapPicker());
+  $("#nav-search-btn").addEventListener("click", () => Nav.searchAddress());
+  $("#nav-search-input").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); Nav.searchAddress(); } });
   $("#nav-clear-route-btn").addEventListener("click", () => Nav.clearRoute());
   renderTvChannelList();
   renderGuideChannelList();
