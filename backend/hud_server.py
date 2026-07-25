@@ -2177,6 +2177,18 @@ async def wifi_join(ssid, psk):
             out, _ = await asyncio.wait_for(proc.communicate(), timeout=45)
             detail = (out or b"").decode(errors="ignore").strip()[:200]
             ok = proc.returncode == 0
+        if ok:
+            # Persist + auto-reconnect on every boot (like Bluetooth remembers
+            # its pairing). nmcli saves the profile already; make autoconnect
+            # explicit so it always comes back on its own (bailey 2026-07-25).
+            try:
+                p = await asyncio.create_subprocess_exec(
+                    "nmcli", "connection", "modify", ssid,
+                    "connection.autoconnect", "yes", "connection.autoconnect-priority", "10",
+                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+                await asyncio.wait_for(p.wait(), timeout=10)
+            except Exception:
+                pass
         log("wifi join", ssid, "->", "OK" if ok else "FAIL", detail)
         return {"ok": ok, "detail": detail}
     except asyncio.TimeoutError:
@@ -2380,15 +2392,139 @@ async def set_clock(iso_str):
         return False
 
 
+GITHUB_REPO = "1yeliabsufur1/gost-perimetr-os"
+
+
+def _current_version():
+    for p in (BASE_DIR / "VERSION", Path("/opt/gost/VERSION")):
+        try:
+            v = p.read_text().strip()
+            if v:
+                return v
+        except Exception:
+            pass
+    return "0"
+
+
+def _gh_latest_release():
+    """Latest GitHub release (blocking; run in an executor)."""
+    url = "https://api.github.com/repos/%s/releases/latest" % GITHUB_REPO
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "gost-updater", "Accept": "application/vnd.github+json"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        return json.load(r)
+
+
 async def run_update_check():
+    """Ask GitHub for the latest release and compare to the running version."""
+    try:
+        data = await asyncio.get_event_loop().run_in_executor(None, _gh_latest_release)
+        tag = (data.get("tag_name") or "").strip()
+        cur = _current_version()
+        norm = lambda v: v.lstrip("vV")
+        available = bool(tag) and norm(tag) != norm(cur)
+        return {"ok": True, "latest": tag, "current": cur, "available": available,
+                "detail": ("UPDATE AVAILABLE: %s" % tag) if available
+                          else ("UP TO DATE (%s)" % (tag or cur))}
+    except Exception as e:
+        return {"ok": False, "available": False, "detail": "check failed: " + str(e)[:200]}
+
+
+async def run_update_apply(state):
+    """Download the latest release's source and apply it NON-DESTRUCTIVELY:
+    only app/backend/system/tools are refreshed (via the tested USB updater),
+    so downloaded maps, media, ROMs, settings and Wi-Fi are all preserved."""
+    def progress(line):
+        state.broadcast({"type": "update.progress", "line": line})
+    try:
+        progress("checking latest release...")
+        data = await asyncio.get_event_loop().run_in_executor(None, _gh_latest_release)
+        tag = (data.get("tag_name") or "").strip()
+        if not tag:
+            return {"ok": False, "detail": "no GitHub release found"}
+        url = data.get("tarball_url") or \
+            ("https://github.com/%s/archive/refs/tags/%s.tar.gz" % (GITHUB_REPO, tag))
+        progress("downloading %s ..." % tag)
+        workdir = "/tmp/gost-gh-update"
+
+        def _download_extract():
+            import tarfile
+            shutil.rmtree(workdir, ignore_errors=True)
+            os.makedirs(workdir, exist_ok=True)
+            tgz = os.path.join(workdir, "src.tar.gz")
+            req = urllib.request.Request(url, headers={"User-Agent": "gost-updater"})
+            with urllib.request.urlopen(req, timeout=180) as r, open(tgz, "wb") as f:
+                shutil.copyfileobj(r, f)
+            with tarfile.open(tgz) as t:
+                t.extractall(workdir)
+            for name in sorted(os.listdir(workdir)):
+                d = os.path.join(workdir, name)
+                if os.path.isdir(d) and os.path.exists(os.path.join(d, "app", "index.html")):
+                    return d
+            return None
+
+        srcdir = await asyncio.get_event_loop().run_in_executor(None, _download_extract)
+        if not srcdir:
+            return {"ok": False, "detail": "archive missing app/ + backend/"}
+
+        # Apply in the background so we can reply BEFORE the updater restarts us.
+        async def _apply():
+            await asyncio.sleep(0.4)
+            updater = str(BASE_DIR / "tools" / "update-from-usb.sh")
+            p = await asyncio.create_subprocess_exec(
+                "sudo", "-n", "bash", updater, srcdir,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+            out, _ = await p.communicate()
+            for ln in (out or b"").decode(errors="ignore").splitlines()[-12:]:
+                progress(ln)
+            # updater restarts hud-backend/hud-kiosk -> the dashboard reloads here.
+        asyncio.create_task(_apply())
+        return {"ok": True, "detail": "installing %s -- keeps your maps/media/settings; the dashboard reloads" % tag}
+    except Exception as e:
+        return {"ok": False, "detail": str(e)[:300]}
+
+
+async def wifi_status():
+    """Are we on Wi-Fi? Returns {online, ssid} for the top-left indicator."""
     try:
         proc = await asyncio.create_subprocess_exec(
-            "git", "-C", str(BASE_DIR), "fetch", "--dry-run",
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        out, err = await proc.communicate()
-        return {"ok": proc.returncode == 0, "detail": (out + err).decode(errors="ignore")[:500]}
+            "nmcli", "-t", "-f", "ACTIVE,SSID", "dev", "wifi",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=8)
+        for line in out.decode(errors="ignore").splitlines():
+            parts = re.split(r"(?<!\\):", line)
+            if parts and parts[0] == "yes":
+                ssid = parts[1].replace("\\:", ":") if len(parts) > 1 and parts[1] else None
+                return {"online": True, "ssid": ssid}
+        return {"online": False, "ssid": None}
+    except Exception:
+        return {"online": False, "ssid": None}
+
+
+async def ssh_set(enable):
+    """Enable/disable + start/stop the SSH server (operator has NOPASSWD sudo)."""
+    unit = "ssh"
+    act = ("enable", "--now") if enable else ("disable", "--now")
+    try:
+        p = await asyncio.create_subprocess_exec(
+            "sudo", "-n", "systemctl", act[0], act[1], unit,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+        out, _ = await asyncio.wait_for(p.communicate(), timeout=20)
+        return {"ok": p.returncode == 0, "enabled": bool(enable),
+                "detail": (out or b"").decode(errors="ignore")[:200]}
     except Exception as e:
-        return {"ok": False, "detail": str(e)}
+        return {"ok": False, "enabled": bool(enable), "detail": str(e)[:200]}
+
+
+async def ssh_status():
+    try:
+        p = await asyncio.create_subprocess_exec(
+            "systemctl", "is-active", "ssh",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+        out, _ = await asyncio.wait_for(p.communicate(), timeout=8)
+        return {"enabled": (out or b"").decode(errors="ignore").strip() == "active"}
+    except Exception:
+        return {"enabled": False}
 
 
 def system_info():
@@ -2942,6 +3078,14 @@ async def route_message(state: GostState, ws, msg):
         await ws.send(json.dumps({"type": "clock.set", "ok": ok}))
     elif t == "update.check":
         await ws.send(json.dumps({"type": "update.check", **await run_update_check()}))
+    elif t == "update.apply":
+        await ws.send(json.dumps({"type": "update.apply", **await run_update_apply(state)}))
+    elif t == "wifi.status":
+        await ws.send(json.dumps({"type": "wifi.status", **await wifi_status()}))
+    elif t == "ssh.status":
+        await ws.send(json.dumps({"type": "ssh.status", **await ssh_status()}))
+    elif t == "ssh.set":
+        await ws.send(json.dumps({"type": "ssh.set", **await ssh_set(bool(msg.get("on")))}))
     elif t == "system.info":
         await ws.send(json.dumps({"type": "system.info", **system_info()}))
 

@@ -812,8 +812,18 @@ a { color: var(--pri); }
         <div class="frame" data-title="UPDATES">
           <div class="settings-row">
             <button data-focus id="update-check-btn">[ CHECK FOR UPDATES ]</button>
+            <button data-focus id="update-apply-btn" class="hidden">[ INSTALL UPDATE ]</button>
             <span id="update-result" class="dim"></span>
           </div>
+          <div class="dim" style="font-size:11px; margin-top:4px;">Pulls the latest release from GitHub and refreshes everything in place -- your maps, media, settings and Wi-Fi are kept.</div>
+          <div id="update-progress" class="dim" style="margin-top:6px; white-space:pre-wrap; max-height:120px; overflow-y:auto; font-size:11px;"></div>
+        </div>
+        <div class="frame" data-title="REMOTE ACCESS (SSH)">
+          <div class="settings-row">
+            <button data-focus id="ssh-toggle-btn">…</button>
+            <span id="ssh-result" class="dim"></span>
+          </div>
+          <div class="dim" style="font-size:11px; margin-top:4px;">Lets a computer log in over the network for maintenance. Leave OFF unless you need it.</div>
         </div>
         <div class="frame" data-title="POWER">
           <div class="settings-row">
@@ -1132,6 +1142,10 @@ const Net = {
       updateConnIndicator();
       // Re-sync after a (re)connect so the UI isn't stale from the gap.
       this.send({ type: "config.get" });
+      // Top-left indicator = real Wi-Fi state: poll now + every 10s.
+      this.send({ type: "wifi.status" });
+      this.send({ type: "ssh.status" });
+      if (!this._wifiPoll) this._wifiPoll = setInterval(() => this.send({ type: "wifi.status" }), 10000);
     };
     this.ws.onclose = () => { this.connected = false; updateConnIndicator(); this.onDisconnect(); };
     this.ws.onerror = () => { try { this.ws.close(); } catch (e) {} };   // -> onclose -> reconnect
@@ -1267,7 +1281,11 @@ const Net = {
         ? (msg.obd ? "✓ " + (msg.detail || "OBD ADAPTER PAIRED") : "✓ PAIRED + TRUSTED")
         : "FAILED: " + (msg.detail || "");
     }
-    else if (msg.type === "update.check") { $("#update-result").textContent = msg.ok ? "UP TO DATE" : "CHECK FAILED"; }
+    else if (msg.type === "update.check") { Sys.onUpdateCheck(msg); }
+    else if (msg.type === "update.apply") { Sys.onUpdateApply(msg); }
+    else if (msg.type === "update.progress") { Sys.onUpdateProgress(msg); }
+    else if (msg.type === "wifi.status") { Net.wifiOnline = !!msg.online; Net.wifiSsid = msg.ssid || null; updateConnIndicator(); }
+    else if (msg.type === "ssh.status" || msg.type === "ssh.set") { Sys.onSshStatus(msg); }
     else if (msg.type === "clock.set") { $("#clock-set-result").textContent = msg.ok ? "CLOCK SET" : "FAILED -- CHECK DEVICE LOGS"; }
     else if (msg.type === "system.info") { renderAbout(msg); }
     else if (msg.type === "youtube.results") { YT.onResults(msg); }
@@ -1281,9 +1299,63 @@ const Net = {
 };
 
 function updateConnIndicator() {
-  $("#conn-dot").classList.toggle("on", Net.connected);
-  $("#conn-label").textContent = Net.connected ? "ONLINE" : (Demo.running ? "PREVIEW" : "OFFLINE");
+  const dot = $("#conn-dot"), label = $("#conn-label");
+  if (!Net.connected) {                 // HUD backend/WS itself is down
+    dot.classList.remove("on");
+    label.textContent = Demo.running ? "PREVIEW" : "OFFLINE";
+    return;
+  }
+  // Backend up -> the top-left reflects real Wi-Fi/internet connectivity, so
+  // it actually means something to the driver (bailey 2026-07-25).
+  const on = !!Net.wifiOnline;
+  dot.classList.toggle("on", on);
+  label.textContent = on ? ("ONLINE" + (Net.wifiSsid ? " · " + Net.wifiSsid : "")) : "OFFLINE · NO WI-FI";
 }
+
+/* SYSTEM -- GitHub self-update (non-destructive) + SSH on/off toggle. */
+const Sys = {
+  onUpdateCheck(msg) {
+    const r = $("#update-result");
+    if (!msg.ok) { r.textContent = "CHECK FAILED -- " + (msg.detail || "no internet?"); this.showApply(false); return; }
+    r.textContent = msg.detail || (msg.available ? ("UPDATE: " + msg.latest) : "UP TO DATE");
+    this.showApply(!!msg.available);
+  },
+  showApply(on) { const b = $("#update-apply-btn"); if (b) b.classList.toggle("hidden", !on); },
+  checkUpdate() {
+    if (!Net.connected) { $("#update-result").textContent = "REQUIRES DEVICE"; return; }
+    $("#update-result").textContent = "CHECKING GITHUB..."; this.showApply(false);
+    Net.send({ type: "update.check" });
+  },
+  applyUpdate() {
+    if (!Net.connected) return;
+    $("#update-progress").textContent = "";
+    $("#update-result").textContent = "INSTALLING (do not power off)...";
+    this.showApply(false);
+    Net.send({ type: "update.apply" });
+  },
+  onUpdateApply(msg) {
+    if (!msg.ok) $("#update-result").textContent = "FAILED -- " + (msg.detail || "");
+    this.onUpdateProgress({ line: msg.detail || "" });
+  },
+  onUpdateProgress(msg) {
+    const p = $("#update-progress"); if (!p || !msg.line) return;
+    p.textContent += msg.line + "\n"; p.scrollTop = p.scrollHeight;
+  },
+  onSshStatus(msg) {
+    const b = $("#ssh-toggle-btn"); if (!b) return;
+    const on = !!msg.enabled;
+    b.dataset.on = on ? "1" : "0";
+    b.textContent = on ? "[ SSH: ON → tap to disable ]" : "[ SSH: OFF → tap to enable ]";
+    const r = $("#ssh-result");
+    if (r) r.textContent = (msg.ok === false) ? ("FAILED: " + (msg.detail || "")) : "";
+  },
+  toggleSsh() {
+    if (!Net.connected) { $("#ssh-result").textContent = "REQUIRES DEVICE"; return; }
+    const turnOn = $("#ssh-toggle-btn").dataset.on !== "1";
+    $("#ssh-result").textContent = turnOn ? "ENABLING..." : "DISABLING...";
+    Net.send({ type: "ssh.set", on: turnOn });
+  },
+};
 
 /* ============================================================================
  * FAULT BUS (Part 2 §8) -- one place every subsystem publishes degraded
@@ -3837,12 +3909,20 @@ const Nav = {
         $("#nav-fallback").classList.add("hidden");
         $("#nav-hud").classList.remove("hidden");
         this.updateMapPickerBtn();
-        // No GPS fix -> frame the whole downloaded region so the user sees
-        // their map immediately (the puck takes over once a fix arrives).
-        if (!this.lastFix && region) {
-          this.map.fitBounds([[region.minLon, region.minLat], [region.maxLon, region.maxLat]],
+        // maplibre may have been created while its container was display:none
+        // (the NAV tab hidden), so it measured 0x0 and rendered a tiny square
+        // in the corner. Resize once layout settles, then frame the region
+        // (no GPS fix -> show the whole downloaded area; the puck takes over
+        // once a fix arrives).
+        this._frameRegion = () => {
+          if (!this.map) return;
+          this.map.resize();
+          if (!this.lastFix && region) this.map.fitBounds(
+            [[region.minLon, region.minLat], [region.maxLon, region.maxLat]],
             { padding: 24, duration: 0 });
-        }
+        };
+        requestAnimationFrame(this._frameRegion);
+        setTimeout(this._frameRegion, 300);
       } else {
         this.showFallback("MAP LIBRARY FAILED TO LOAD");
       }
@@ -4225,10 +4305,9 @@ function buildSettings() {
     $("#dashcam-toggle-btn").textContent = on ? "ON" : "OFF";
     Net.send({ type: "dashcam.set", on });
   });
-  $("#update-check-btn").addEventListener("click", () => {
-    if (Net.connected) Net.send({ type: "update.check" });
-    else $("#update-result").textContent = "OFFLINE DEMO -- UPDATES REQUIRE DEVICE";
-  });
+  $("#update-check-btn").addEventListener("click", () => Sys.checkUpdate());
+  $("#update-apply-btn").addEventListener("click", () => Sys.applyUpdate());
+  $("#ssh-toggle-btn").addEventListener("click", () => Sys.toggleSsh());
   $("#clock-set-btn").addEventListener("click", () => {
     const val = $("#clock-set-input").value; // "YYYY-MM-DDTHH:MM" from datetime-local
     if (!val) { $("#clock-set-result").textContent = "PICK A DATE/TIME FIRST"; return; }
