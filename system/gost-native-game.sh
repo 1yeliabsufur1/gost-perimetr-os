@@ -51,14 +51,16 @@ InternalResolution = 1
 VSync = True
 INI
 [ -f "$DCFG/Dolphin.ini" ] || cat > "$DCFG/Dolphin.ini" <<'INI'
-[General]
-SkipNKitWarning = True
 [Display]
 Fullscreen = True
 RenderToMain = True
 [Interface]
 ConfirmStop = False
 PauseOnFocusLost = False
+SkipNKitWarning = True
+[Analytics]
+Enabled = False
+PermissionAsked = True
 INI
 
 echo "launching Dolphin (Esc / Alt+F4 to return to GOST): $(basename "$GAME")"

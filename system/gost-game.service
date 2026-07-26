@@ -24,8 +24,12 @@ StandardOutput=journal
 StandardError=journal
 UtmpIdentifier=tty1
 ExecStart=/opt/gost/system/gost-native-game.sh
-# Always bring the dashboard back when the game exits (root via '+' so the
-# gost user's service can restart a system unit).
-ExecStopPost=+/usr/bin/systemctl start hud-kiosk.service
+# Kill the whole group promptly on stop -- Dolphin/cage can ignore a plain
+# SIGTERM and hang the shutdown otherwise (bailey: stop-post timed out).
+KillMode=mixed
+TimeoutStopSec=8
+# Always bring the dashboard back when the game exits (root via '+', non-blocking
+# so stop-post returns immediately instead of waiting on the kiosk start).
+ExecStopPost=+/usr/bin/systemctl --no-block start hud-kiosk.service
 
 # Not started at boot -- the backend starts it on demand.
