@@ -38,7 +38,7 @@ DCFG="${HOME:-/home/gost}/.config/dolphin-emu"
 mkdir -p "$DCFG"
 [ -f "$DCFG/GFX.ini" ] || cat > "$DCFG/GFX.ini" <<'INI'
 [Settings]
-Backend = OGL
+Backend = Vulkan
 InternalResolution = 1
 [Hardware]
 VSync = True
