@@ -2896,13 +2896,19 @@ _SYSTEM_FOLDERS = {
     "intellivision": ("INTELLIVISION", "freeintv"), "3do": ("3DO", "opera"), "virtualboy": ("VIRTUAL BOY", "mednafen_vb"),
 }
 # disc/image extensions that only make sense once a system folder disambiguates them
-_DISC_EXTS = {".iso", ".cue", ".bin", ".chd", ".cso", ".pbp", ".gdi", ".cdi", ".m3u", ".img", ".rom"}
+_DISC_EXTS = {".iso", ".cue", ".bin", ".chd", ".cso", ".pbp", ".gdi", ".cdi", ".m3u", ".img", ".rom",
+              ".rvz", ".wbfs", ".gcm", ".gcz", ".wia", ".wad"}   # GameCube/Wii disc formats
 _PLAYABLE_EXTS = set(_ROM_CORES) | _DISC_EXTS
+# Filenames that are unambiguously GameCube/Wii regardless of folder (Dolphin
+# handles these; .nkit.iso in particular looks like a plain .iso by suffix).
+_DOLPHIN_NAME_RE = re.compile(r"\.(nkit\.iso|nkit\.gcz|rvz|wbfs|gcm|gcz|wia|wad)$", re.I)
 
 
 def _system_for(path):
     """(system, core) for a ROM: folder wins (disambiguates disc formats), else extension."""
     p = Path(path)
+    if _DOLPHIN_NAME_RE.search(p.name):            # .nkit.iso / .rvz / .wbfs ... = GameCube/Wii
+        return ("GAMECUBE / WII", "dolphin")
     if p.suffix.lower() not in _PLAYABLE_EXTS:
         return None
     for part in p.parts[:-1]:                      # any parent folder named after a system
@@ -2928,6 +2934,46 @@ def games_list():
     except Exception as e:
         log("games_list failed:", e)
     return roms
+
+
+async def launch_native_game(state, rel):
+    """Boot a GameCube/Wii game in native Dolphin by starting gost-game.service,
+    which Conflicts=hud-kiosk so the dashboard yields the screen (and restores it
+    when Dolphin exits). `rel` is the /roms/-relative path, confined to ROMS_DIR."""
+    try:
+        rel = unquote((rel or "").lstrip("/"))
+        if rel.startswith("roms/"):
+            rel = rel[len("roms/"):]
+        target = (ROMS_DIR / rel).resolve()
+        try:
+            target.relative_to(ROMS_DIR.resolve())      # no escaping ROMS_DIR
+        except ValueError:
+            return {"ok": False, "detail": "invalid game path"}
+        if not target.is_file():
+            return {"ok": False, "detail": "game not on device -- import it from USB first"}
+        if not shutil.which("dolphin-emu", path="/usr/games:/usr/bin:/usr/local/bin:/bin"):
+            return {"ok": False, "detail": "Dolphin isn't installed on this device"}
+        (STATE_DIR / "game-target").write_text(str(target))
+        p = await asyncio.create_subprocess_exec(
+            "sudo", "-n", "systemctl", "start", "gost-game.service",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+        out, _ = await asyncio.wait_for(p.communicate(), timeout=25)
+        if p.returncode == 0:
+            return {"ok": True, "detail": "launching " + target.name + " in Dolphin"}
+        return {"ok": False, "detail": (out or b"").decode(errors="ignore")[:200] or "failed to start game"}
+    except Exception as e:
+        return {"ok": False, "detail": str(e)[:200]}
+
+
+async def stop_native_game():
+    try:
+        p = await asyncio.create_subprocess_exec(
+            "sudo", "-n", "systemctl", "stop", "gost-game.service",
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+        await asyncio.wait_for(p.wait(), timeout=20)
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "detail": str(e)[:120]}
 
 
 # Removable-media mount roots to scan for ROMs (Linux/Pi). USB sticks auto-mount
@@ -3157,6 +3203,10 @@ async def route_message(state: GostState, ws, msg):
         await ws.send(json.dumps({"type": "ssh.set", **await ssh_set(bool(msg.get("on")))}))
     elif t == "geocode":
         await ws.send(json.dumps({"type": "geocode", **await geocode(msg.get("q"), msg.get("near"))}))
+    elif t == "game.native":
+        await ws.send(json.dumps({"type": "game.native", **await launch_native_game(state, msg.get("path"))}))
+    elif t == "game.stop":
+        await ws.send(json.dumps({"type": "game.stop", **await stop_native_game()}))
     elif t == "system.info":
         await ws.send(json.dumps({"type": "system.info", **system_info()}))
 

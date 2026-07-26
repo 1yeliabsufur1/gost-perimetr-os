@@ -1,0 +1,31 @@
+[Unit]
+Description=GOST native game (Dolphin GameCube/Wii) -- swaps out the kiosk
+After=hud-backend.service seatd.service systemd-user-sessions.service
+# Taking the screen from the dashboard and giving it back are the whole point.
+# After= as well as Conflicts= so systemd fully STOPS the kiosk before starting
+# us -- otherwise our cage collides with the kiosk's cage and dies instantly.
+Conflicts=hud-kiosk.service
+After=hud-kiosk.service
+ConditionPathExists=!/boot/gost_safe_mode
+ConditionPathExists=!/boot/firmware/gost_safe_mode
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=__GOST_USER__
+# Same seat/tty setup as the kiosk so cage can own the display.
+PAMName=login
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+StandardInput=tty
+StandardOutput=journal
+StandardError=journal
+UtmpIdentifier=tty1
+ExecStart=/opt/gost/system/gost-native-game.sh
+# Always bring the dashboard back when the game exits (root via '+' so the
+# gost user's service can restart a system unit).
+ExecStopPost=+/usr/bin/systemctl start hud-kiosk.service
+
+# Not started at boot -- the backend starts it on demand.

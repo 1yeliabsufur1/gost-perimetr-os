@@ -230,6 +230,12 @@ systemctl try-restart polkit 2>/dev/null || true
 for unit in hud-backend.service hud-kiosk.service; do
   sed "s/__GOST_USER__/$GOST_USER/g" "$GOST_HOME/system/$unit" > "/etc/systemd/system/$unit"
 done
+# gost-game.service: on-demand native game launcher (Dolphin GC/Wii). Started by
+# the backend, not at boot -- template the user, install, but do NOT enable.
+if [ -f "$GOST_HOME/system/gost-game.service" ]; then
+  sed "s/__GOST_USER__/$GOST_USER/g" "$GOST_HOME/system/gost-game.service" > "/etc/systemd/system/gost-game.service"
+  chmod +x "$GOST_HOME/system/gost-native-game.sh" 2>/dev/null || true
+fi
 
 # OBD-over-Bluetooth (Part 1): OBDLink MX+ SPP link. Non-destructive -- ships
 # its own unit + a drop-in that only adds ordering to the backend.

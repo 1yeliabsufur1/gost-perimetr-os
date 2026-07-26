@@ -1317,6 +1317,7 @@ const Net = {
     }
     else if (msg.type === "ssh.status" || msg.type === "ssh.set") { Sys.onSshStatus(msg); }
     else if (msg.type === "geocode") { Nav.onGeocode(msg); }
+    else if (msg.type === "game.native") { if (!msg.ok) $("#games-msg").textContent = "couldn't launch Dolphin: " + (msg.detail || ""); }
     else if (msg.type === "clock.set") { $("#clock-set-result").textContent = msg.ok ? "CLOCK SET" : "FAILED -- CHECK DEVICE LOGS"; }
     else if (msg.type === "system.info") { renderAbout(msg); }
     else if (msg.type === "youtube.results") { YT.onResults(msg); }
@@ -1980,30 +1981,44 @@ const Games = {
     ".ws": "ws", ".wsc": "ws", ".a26": "atari2600", ".a78": "atari7800", ".lnx": "lynx", ".j64": "jaguar",
     ".col": "coleco", ".d64": "vice_x64", ".zip": "arcade", ".iso": "psx", ".cue": "psx", ".bin": "psx", ".chd": "psx", ".pbp": "psx",
   },
-  // Disc formats for consoles with NO in-browser core (Wii/GameCube via
-  // .nkit.iso/.wbfs/.rvz/.gcm, PSP via .cso, Xbox via .xbe/.iso-x, WiiU). These
-  // used to fall through to the psx core and hang the whole UI (bailey's Animal
-  // Crossing Wii disc). Detect + refuse with a clear message instead.
-  UNSUPPORTED_RE: /\.(nkit\.iso|wbfs|rvz|gcm|gcz|wad|wux|wud|cso|xbe|xex)$/i,
-  unsupported(name) { return this.UNSUPPORTED_RE.test(name || ""); },
+  // GameCube/Wii discs -> native Dolphin (installed on-device), which runs
+  // outside the browser via the kiosk-swap. Everything with an in-browser core
+  // stays in EmulatorJS.
+  DOLPHIN_RE: /\.(nkit\.iso|nkit\.gcz|rvz|wbfs|gcm|gcz|wia|wad)$/i,
+  // Consoles with NO emulator available here at all (PSP/PS2/Xbox/WiiU/Switch).
+  UNSUPPORTED_RE: /\.(cso|xbe|xex|wux|wud|xci|nsp)$/i,
+  isDolphin(g) { return !!(g && (g.core === "dolphin" || this.DOLPHIN_RE.test(g.path || g.name || ""))); },
+  unsupported(name, core) {
+    if (core === "ppsspp" || core === "pcsx2") return true;   // PSP / PS2 -- no emulator here
+    return this.UNSUPPORTED_RE.test(name || "");
+  },
   unsupportedMsg(name) {
     return (name || "this game").split(/[\\/]/).pop() +
-      " needs a console with no in-browser core (Wii / GameCube / PSP / Xbox) -- not playable here.";
+      " needs a console we can't emulate on this device (PSP / PS2 / Xbox).";
   },
-  // Play a device ROM (from the backend list) in the in-browser emulator
+  // Play a device ROM (from the backend list): GC/Wii -> Dolphin, else in-browser
   launch(g) {
     const name = g.path || g.name || "";
-    if (this.unsupported(name)) { $("#games-msg").textContent = this.unsupportedMsg(name); return; }
+    if (this.isDolphin(g)) { this.launchNative(g); return; }
+    if (this.unsupported(name, g.core)) { $("#games-msg").textContent = this.unsupportedMsg(name); return; }
     const ext = "." + name.split(".").pop().toLowerCase();
     const core = this.EJS_BY_SYSTEM[g.system] || this.EJS_BY_EXT[ext];
     if (!core) { $("#games-msg").textContent = "no in-browser core for " + (g.system || ext); return; }
     const base = "http://" + (location.hostname || "127.0.0.1") + ":8766";
     this.launchEJS(core, base + (g.url || ""), g.name || "game");
   },
+  // Hand a GameCube/Wii game to native Dolphin (screen switches away from the
+  // dashboard; exit Dolphin with Esc / Alt+F4 / a controller Home button).
+  launchNative(g) {
+    if (!Net.connected) { $("#games-msg").textContent = "native games run on the device only"; return; }
+    $("#games-msg").textContent = "Launching " + (g.name || "game") + " in Dolphin -- the screen will switch. Esc / Alt+F4 returns to GOST.";
+    Net.send({ type: "game.native", path: g.url || g.path });
+  },
   // Play a ROM the user picks from their local files (no backend needed)
   pickFile() { $("#games-file-input").click(); },
   playFile(file) {
     if (!file) return;
+    if (this.DOLPHIN_RE.test(file.name)) { $("#games-msg").textContent = "GameCube/Wii games run in Dolphin -- copy it onto the device with IMPORT FROM USB, then launch it from the list."; return; }
     if (this.unsupported(file.name)) { $("#games-msg").textContent = this.unsupportedMsg(file.name); return; }
     const ext = "." + file.name.split(".").pop().toLowerCase();
     const name = file.name.replace(/\.[^.]+$/, "");
