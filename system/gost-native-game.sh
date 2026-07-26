@@ -17,8 +17,15 @@ export PATH="/usr/games:/usr/local/bin:/usr/bin:/bin:$PATH"   # dolphin-emu live
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 mkdir -p "$XDG_RUNTIME_DIR"; chmod 700 "$XDG_RUNTIME_DIR" 2>/dev/null || true
 export WLR_SEAT="${WLR_SEAT:-seat0}"
-export WLR_LIBINPUT_NO_DEVICES=1
-echo "GAME=$GAME  XDG=$XDG_RUNTIME_DIR"
+# NOTE: unlike the kiosk we do NOT set WLR_LIBINPUT_NO_DEVICES -- Dolphin needs
+# the keyboard/gamepad/touchscreen for gameplay and to dismiss dialogs.
+# Dolphin is a Qt6 app. Under cage (pure Wayland) it must use the Qt Wayland
+# platform plugin -- otherwise Qt falls back to X11 (no X server here) and the
+# video backend fails to initialise (bailey: "failed to initialise video
+# backend"). Force Wayland + a windowed decoration-free surface.
+export QT_QPA_PLATFORM=wayland
+export QT_WAYLAND_DISABLE_WINDOWDECORATION=1
+echo "GAME=$GAME  XDG=$XDG_RUNTIME_DIR  QT_QPA_PLATFORM=$QT_QPA_PLATFORM"
 
 [ -n "$GAME" ] && [ -f "$GAME" ] || { echo "no game file: '${GAME:-}'"; sleep 2; exit 1; }
 command -v dolphin-emu >/dev/null 2>&1 || { echo "dolphin-emu not installed"; sleep 3; exit 1; }
@@ -44,15 +51,18 @@ InternalResolution = 1
 VSync = True
 INI
 [ -f "$DCFG/Dolphin.ini" ] || cat > "$DCFG/Dolphin.ini" <<'INI'
+[General]
+SkipNKitWarning = True
 [Display]
 Fullscreen = True
 RenderToMain = True
 [Interface]
 ConfirmStop = False
+PauseOnFocusLost = False
 INI
 
 echo "launching Dolphin (Esc / Alt+F4 to return to GOST): $(basename "$GAME")"
-# -b batch (no GUI, quit when emulation stops), -e exec the game. cage gives it
-# the Wayland display/seat fullscreen. Not exec'd so we can log the exit.
-cage -- dolphin-emu -b -e "$GAME"
+# -b batch (no GUI, quit when emulation stops), -v Vulkan (V3DV; OGL can't init
+# under cage), -e exec the game. cage gives it the Wayland display fullscreen.
+cage -- dolphin-emu -b -v Vulkan -e "$GAME"
 echo "=== $(date '+%F %T') dolphin exited rc=$? ==="
