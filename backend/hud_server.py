@@ -22,6 +22,13 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit, urlencode, quote
 import urllib.request
 
+# Standard OBD-II DTC descriptions (works for every make's generic codes).
+try:
+    from dtc_lookup import describe_dtc
+except Exception:
+    def describe_dtc(code):
+        return ""
+
 try:
     import websockets
 except ImportError:
@@ -1593,13 +1600,17 @@ class Telemetry:
             for code, kind in (codes or []):
                 if not code:
                     continue
-                label = (kind or "").upper()   # STORED / PENDING / PERMANENT
+                kind_u = (kind or "").upper()          # STORED / PENDING / PERMANENT
+                meaning = describe_dtc(code)            # human text (all makes for generic codes)
                 if code not in self.dtcs:
-                    self.dtcs[code] = {"first_seen": now_iso, "desc": label}
+                    self.dtcs[code] = {"first_seen": now_iso, "kind": kind_u, "desc": meaning}
                     changed = True
-                elif label and self.dtcs[code].get("desc") != label:
-                    self.dtcs[code]["desc"] = label
-                    changed = True
+                else:
+                    e = self.dtcs[code]
+                    if kind_u and e.get("kind") != kind_u:
+                        e["kind"] = kind_u; changed = True
+                    if meaning and e.get("desc") != meaning:
+                        e["desc"] = meaning; changed = True
             if changed:
                 self.dtc_path.write_text(json.dumps(self.dtcs, indent=2))
         except Exception as e:

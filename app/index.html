@@ -2210,7 +2210,7 @@ function renderDrive(t) {
     } else {
       codes.forEach(([code, info]) => {
         dtcBox.appendChild(el("div", { class: "dtc-row" }, [
-          el("span", { class: "glow" }, [code + (info.desc ? " -- " + info.desc : "")]),
+          el("span", { class: "glow" }, [code + (info.kind ? " [" + info.kind + "]" : "") + (info.desc ? " -- " + info.desc : "")]),
           el("span", { class: "dim" }, [" first seen " + (info.first_seen || "?").slice(0, 16).replace("T", " ")]),
         ]));
       });
