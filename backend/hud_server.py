@@ -726,9 +726,14 @@ class TVPlayer:
 
 # ------------------------------------------------------------- telemetry ----
 
-FAST_PIDS = ["SPEED", "RPM", "INTAKE_PRESSURE", "MAF"]
+# Three poll lanes so the gauges stay SNAPPY (each PID is its own serial round-
+# trip). FAST = only the two gauge-critical values, read every cycle -> no lag
+# (bailey: "half-second delay"). MED = boost/MPG/graph inputs a few times a
+# second. SLOW = everything drift-y, once every couple seconds.
+FAST_PIDS = ["SPEED", "RPM"]
+MED_PIDS = ["INTAKE_PRESSURE", "MAF", "THROTTLE_POS", "ENGINE_LOAD", "TIMING_ADVANCE"]
 SLOW_PIDS = ["FUEL_LEVEL", "COOLANT_TEMP", "CONTROL_MODULE_VOLTAGE", "OIL_TEMP",
-             "BAROMETRIC_PRESSURE", "HYBRID_BATTERY_REMAINING", "FUEL_TYPE"]
+             "BAROMETRIC_PRESSURE", "INTAKE_TEMP", "HYBRID_BATTERY_REMAINING", "FUEL_TYPE"]
 
 # Baud rates to try, most-likely first. OBDLink EX defaults to 115200.
 OBD_BAUDS = [115200, 230400, 38400, 9600]
@@ -791,7 +796,11 @@ RAW_PIDS = {
     "SPEED": ("010D", lambda b: float(b[0]) if b else None),                     # km/h
     "RPM": ("010C", lambda b: (256 * b[0] + b[1]) / 4.0 if len(b) >= 2 else None),
     "INTAKE_PRESSURE": ("010B", lambda b: float(b[0]) if b else None),           # kPa
-    "MAF": ("0110", lambda b: (256 * b[0] + b[1]) / 100.0 if len(b) >= 2 else None),
+    "MAF": ("0110", lambda b: (256 * b[0] + b[1]) / 100.0 if len(b) >= 2 else None),   # g/s
+    "THROTTLE_POS": ("0111", lambda b: b[0] * 100.0 / 255 if b else None),        # %
+    "ENGINE_LOAD": ("0104", lambda b: b[0] * 100.0 / 255 if b else None),         # %
+    "TIMING_ADVANCE": ("010E", lambda b: b[0] / 2.0 - 64 if b else None),         # deg
+    "INTAKE_TEMP": ("010F", lambda b: float(b[0] - 40) if b else None),           # C
     "FUEL_LEVEL": ("012F", lambda b: b[0] * 100.0 / 255 if b else None),
     "COOLANT_TEMP": ("0105", lambda b: float(b[0] - 40) if b else None),         # C
     "CONTROL_MODULE_VOLTAGE": ("0142", lambda b: (256 * b[0] + b[1]) / 1000.0 if len(b) >= 2 else None),
@@ -943,11 +952,107 @@ class RawOBD:
                     seen.setdefault(code, kind)   # first-seen kind wins
         return [(c, k) for c, k in seen.items()]
 
+    def read_vin(self):
+        """Mode 09 PID 02 -> the 17-char VIN (multi-frame ASCII). None if the
+        ECU doesn't answer. Used to auto-identify the vehicle."""
+        try:
+            resp = self._cmd("0902", 0.5, max_read=6.0)
+            toks = []
+            for line in resp.replace("\r", "\n").split("\n"):
+                line = line.strip()
+                if ":" in line:                      # drop ISO-TP frame index "0:" "1:"
+                    line = line.split(":", 1)[1]
+                toks += [t.upper() for t in self._hex_tokens(line)]
+            # bytes after the "49 02" header are the VIN (a leading count byte,
+            # then 17 printable ASCII). Grab all printable bytes and pull the VIN.
+            start = next((i for i in range(len(toks) - 1)
+                          if toks[i] == "49" and toks[i + 1] == "02"), None)
+            src = toks[start + 2:] if start is not None else toks
+            chars = []
+            for t in src:
+                try:
+                    n = int(t, 16)
+                except ValueError:
+                    continue
+                if 0x20 <= n <= 0x7E:
+                    chars.append(chr(n))
+            blob = "".join(chars)
+            m = re.search(r"[A-HJ-NPR-Z0-9]{17}", blob)   # a valid VIN (no I/O/Q)
+            return m.group(0) if m else None
+        except Exception as e:
+            log("read_vin failed:", e)
+            return None
+
     def close(self):
         try:
             self.ser.close()
         except Exception:
             pass
+
+
+# --------------------------------------------------------------- VIN decode ---
+_VIN_WMI = {
+    "1FT": "Ford", "1FA": "Ford", "1FB": "Ford", "1FC": "Ford", "1FD": "Ford",
+    "1FM": "Ford", "1FL": "Ford", "3FA": "Ford", "2FM": "Ford", "1FN": "Ford",
+    "1G1": "Chevrolet", "1GC": "Chevrolet", "2G1": "Chevrolet", "3GC": "Chevrolet",
+    "1GT": "GMC", "3GT": "GMC", "1GK": "GMC", "1G4": "Buick", "1G6": "Cadillac", "1GY": "Cadillac",
+    "1C3": "Chrysler", "2C3": "Chrysler", "1C4": "Jeep", "1J4": "Jeep", "1C6": "Ram", "3C6": "Ram",
+    "1HG": "Honda", "2HG": "Honda", "JHM": "Honda", "5FN": "Honda", "5J6": "Honda",
+    "JTD": "Toyota", "4T1": "Toyota", "5TD": "Toyota", "2T3": "Toyota", "JTE": "Toyota", "JTM": "Toyota",
+    "1N4": "Nissan", "JN1": "Nissan", "3N1": "Nissan", "5N1": "Nissan",
+    "WBA": "BMW", "WBS": "BMW", "5UX": "BMW", "4US": "BMW",
+    "WDB": "Mercedes-Benz", "WDD": "Mercedes-Benz", "4JG": "Mercedes-Benz", "W1K": "Mercedes-Benz",
+    "WVW": "Volkswagen", "3VW": "Volkswagen", "1VW": "Volkswagen", "WV1": "Volkswagen",
+    "KMH": "Hyundai", "5NP": "Hyundai", "KM8": "Hyundai", "KND": "Kia", "5XY": "Kia", "3KP": "Kia",
+    "5YJ": "Tesla", "7SA": "Tesla", "JM1": "Mazda", "JM3": "Mazda", "JF1": "Subaru", "JF2": "Subaru", "4S4": "Subaru",
+}
+_VIN_YEAR = {c: y for c, y in list(zip("ABCDEFGHJKLMNPRSTVWXY", range(2010, 2031)))
+             + list(zip("123456789", range(2001, 2010)))}
+
+
+def _vin_year(vin):
+    return _VIN_YEAR.get(vin[9].upper()) if len(vin) >= 10 else None
+
+
+def _decode_vin_online(vin):
+    url = "https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVinValues/%s?format=json" % vin
+    req = urllib.request.Request(url, headers={"User-Agent": "gost-perimetr-os/1.0"})
+    with urllib.request.urlopen(req, timeout=12) as r:
+        return (json.load(r).get("Results") or [{}])[0]
+
+
+async def decode_vin(vin):
+    """VIN -> {vin, make, model, year, fuel, powertrain, display}. NHTSA online
+    for full make/model/powertrain; offline WMI + year-char fallback."""
+    info = {"vin": vin, "make": None, "model": None, "year": _vin_year(vin),
+            "fuel": None, "powertrain": None, "display": None}
+    try:
+        res = await asyncio.get_event_loop().run_in_executor(None, _decode_vin_online, vin)
+        info["make"] = (res.get("Make") or "").title() or None
+        info["model"] = res.get("Model") or None
+        yr = res.get("ModelYear")
+        if yr and str(yr).isdigit():
+            info["year"] = int(yr)
+        fuel = res.get("FuelTypePrimary") or ""
+        elec = res.get("ElectrificationLevel") or ""
+        info["fuel"] = fuel or None
+        f = (fuel + " " + elec).lower()
+        if "plug-in" in f or "phev" in f:
+            info["powertrain"] = "phev"
+        elif "hybrid" in f or "hev" in f or "strong" in f or "mild" in f:
+            info["powertrain"] = "hybrid"        # F-150 PowerBoost = Strong HEV
+        elif ("electric" in f or "bev" in f) and "hybrid" not in f:
+            info["powertrain"] = "ev"
+        elif "diesel" in f:
+            info["powertrain"] = "diesel"
+        elif "gas" in f or "petrol" in f:
+            info["powertrain"] = "gas"
+    except Exception as e:
+        log("VIN online decode failed, offline fallback:", e)
+        info["make"] = _VIN_WMI.get(vin[:3].upper())
+    parts = [str(info["year"] or ""), info["make"] or "", info["model"] or ""]
+    info["display"] = " ".join(p for p in parts if p).strip() or vin
+    return info
 
 
 def _obd_capture_dir():
@@ -1172,6 +1277,8 @@ class Telemetry:
         self.state = state
         self.conn = None
         self.vtype = None
+        self.vehicle = None      # {vin, make, model, year, powertrain, display} once VIN read
+        self._vin_tried = False
         self.values = {}
         self.derived = {}
         self.connected = False   # showing ANY data (real OR demo fallback)
@@ -1575,6 +1682,15 @@ class Telemetry:
                 got += 1
         return got
 
+    async def poll_medium(self):
+        got = 0
+        for pid in MED_PIDS:
+            v = await self._query(pid)
+            if v is not None:
+                self.values[pid] = v
+                got += 1
+        return got
+
     async def poll_slow(self):
         got = 0
         for pid in SLOW_PIDS:
@@ -1652,24 +1768,59 @@ class Telemetry:
             self.vtype = "ev"
 
     def derive(self):
-        maf = _num(self.values.get("MAF"))
-        speed_kph = _num(self.values.get("SPEED"))
+        v = self.values
+        maf = _num(v.get("MAF"))
+        speed_kph = _num(v.get("SPEED"))
         mph = speed_kph * 0.621371 if speed_kph is not None else None
-        mapv = _num(self.values.get("INTAKE_PRESSURE"))
-        baro = _num(self.values.get("BAROMETRIC_PRESSURE"))
+        mapv = _num(v.get("INTAKE_PRESSURE"))
+        baro = _num(v.get("BAROMETRIC_PRESSURE"))
         boost_psi = max(0.0, (mapv - baro) * 0.145038) if (mapv is not None and baro is not None) else None
         mpg = 11.3 * mph / maf if (maf is not None and maf >= 0.5 and mph is not None) else None
-        coolant_c = _num(self.values.get("COOLANT_TEMP"))
-        oil_c = _num(self.values.get("OIL_TEMP"))
-        rpm = _num(self.values.get("RPM"))
+        coolant_c = _num(v.get("COOLANT_TEMP"))
+        oil_c = _num(v.get("OIL_TEMP"))
+        rpm = _num(v.get("RPM"))
+        load = _num(v.get("ENGINE_LOAD"))
+        throttle = _num(v.get("THROTTLE_POS"))
+        # Airflow-based instant crank HP + torque -- rough ESTIMATES (~0.85 hp per
+        # g/s of air), shown labelled as such. Fun/"pro" gauges, not a dyno.
+        hp = maf * 0.85 if maf is not None else None
+        torque = (hp * 5252.0 / rpm) if (hp is not None and rpm and rpm > 400) else None
+        # smoothed trip-average MPG (EMA over the drive)
+        if mpg is not None and 0 < mpg < 120:
+            prev = getattr(self, "_mpg_ema", None)
+            self._mpg_ema = mpg if prev is None else (prev * 0.98 + mpg * 0.02)
+        self._update_060(mph)
         self.derived = {
             "mph": mph,
             "boost_psi": boost_psi,
             "mpg": mpg,
+            "avg_mpg": getattr(self, "_mpg_ema", None),
+            "hp": hp,
+            "torque": torque,
+            "engine_load": load,
+            "throttle": throttle,
             "coolant_f": (coolant_c * 9 / 5 + 32) if coolant_c is not None else None,
             "oil_f": (oil_c * 9 / 5 + 32) if oil_c is not None else None,
+            "last_060": getattr(self, "last_060", None),
             "drive_mode": classify_drive_mode(rpm, mph),
         }
+
+    def _update_060(self, mph):
+        """Best-effort 0-60 mph timer from the ~5 Hz speed stream: arm at a
+        standstill, start the clock when moving, record on reaching 60."""
+        if mph is None:
+            return
+        armed = getattr(self, "_z60_armed", True)
+        start = getattr(self, "_z60_start", None)
+        if mph < 1.0:
+            self._z60_armed = True
+            self._z60_start = None
+        elif armed and start is None and mph >= 2.0:
+            self._z60_start = time.time()
+        elif armed and start is not None and mph >= 60.0:
+            self.last_060 = round(time.time() - start, 2)
+            self._z60_armed = False
+            self._z60_start = None
 
     def demo_tick(self):
         t = time.time() - self.demo_t0
@@ -1710,6 +1861,7 @@ class Telemetry:
                       "rr": 27.5 if low else 34.0}
 
     async def poll_loop(self):
+        last_med = 0.0
         last_slow = 0.0
         last_dtc = 0.0
         last_connect = 0.0
@@ -1749,6 +1901,8 @@ class Telemetry:
                         last_connect = now
                         self.values = {}
                         self.vtype = None
+                        self.vehicle = None
+                        self._vin_tried = False       # re-read VIN on a fresh link
                         await self.connect_obd()
                         # Freeze the REAL reason from the connect attempt.
                         # Never re-read obd_status here next cycle -- that fed
@@ -1783,6 +1937,24 @@ class Telemetry:
                     await asyncio.sleep(0.2)
                     continue
                 self.live = True
+                # One-time VIN read per link -> auto-identify the vehicle
+                # (make/model/year + powertrain, so a PowerBoost is known as a
+                # hybrid). Decoded online via NHTSA, offline via WMI fallback.
+                if self.use_raw and self.raw is not None and not getattr(self, "_vin_tried", False):
+                    self._vin_tried = True
+                    try:
+                        vin = await asyncio.get_event_loop().run_in_executor(None, self.raw.read_vin)
+                    except Exception:
+                        vin = None
+                    if vin:
+                        try:
+                            self.vehicle = await decode_vin(vin)
+                            pt = (self.vehicle or {}).get("powertrain")
+                            if pt:
+                                self.vtype = pt          # trust the ECU's identity
+                            log("VIN detected:", vin, "->", (self.vehicle or {}).get("display"))
+                        except Exception as e:
+                            log("VIN decode error:", e)
                 # The showcase's FAKE trouble code must never sit in the real
                 # ledger (bailey saw demo P1A42 listed like a stored code).
                 demo_codes = [c for c, i in self.dtcs.items()
@@ -1798,6 +1970,9 @@ class Telemetry:
                 self.tires = None  # TPMS is Ford mode-22, unmapped -- honest null
                 got = await self.poll_fast()
                 now = time.time()
+                if now - last_med > 0.4:
+                    got += await self.poll_medium()
+                    last_med = now
                 if now - last_slow > 2:
                     got += await self.poll_slow()
                     last_slow = now
@@ -1853,6 +2028,7 @@ class Telemetry:
             "live": self.live,   # True => real OBDLink data (drives LIVE badge)
             "source_mode": self.state.config.get("source_mode", "AUTO"),
             "vtype": self.vtype or "unknown",
+            "vehicle": self.vehicle,   # auto-detected {make,model,year,powertrain,display} from VIN
             "values": self.values,
             "derived": self.derived,
             "dtcs": self.dtcs,
