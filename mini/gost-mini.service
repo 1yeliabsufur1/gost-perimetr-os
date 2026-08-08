@@ -1,0 +1,15 @@
+[Unit]
+Description=GOST MINI (e-paper OBD code reader)
+After=bluetooth.service
+Wants=bluetooth.service
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/gost-mini
+ExecStart=/usr/bin/python3 /home/pi/gost-mini/gostmini.py
+Restart=always
+RestartSec=8
+
+[Install]
+WantedBy=multi-user.target
