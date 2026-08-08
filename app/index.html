@@ -682,6 +682,32 @@ a { color: var(--pri); }
 #yt-shuffle-fab:hover, #yt-shuffle-fab:focus { outline:2px solid var(--pri); outline-offset:1px; }
 #yt-shuffle-fab.on { background:var(--pri); color:var(--bg); box-shadow:0 0 10px var(--pri); }
 
+/* ---- On-screen keyboard (touchscreen head units with no physical keyboard) ---- */
+#osk {
+  position:fixed; left:0; right:0; bottom:0; z-index:1200;
+  background:var(--bg); border-top:2px solid var(--line);
+  box-shadow:0 -8px 28px rgba(0,0,0,0.6);
+  padding:8px 8px calc(8px + env(safe-area-inset-bottom));
+  display:flex; flex-direction:column; gap:6px;
+  font-family:var(--font);
+}
+#osk .osk-row { display:flex; gap:6px; justify-content:center; }
+#osk .osk-key {
+  flex:1 1 0; min-width:0; min-height:52px; font-size:19px; line-height:1;
+  color:var(--pri); background:var(--dim); border:1px solid var(--line);
+  border-radius:var(--radius); cursor:pointer; touch-action:manipulation;
+  user-select:none; -webkit-user-select:none; padding:0 4px;
+}
+#osk .osk-key:active, #osk .osk-key.held { background:var(--pri); color:var(--bg); }
+#osk .osk-key.wide  { flex:1.6 1 0; font-size:14px; letter-spacing:1px; }
+#osk .osk-key.space { flex:5 1 0; }
+#osk .osk-key.go    { background:var(--pri); color:var(--bg); font-weight:bold; }
+#osk .osk-key.on    { outline:2px solid var(--pri); }
+#osk-bar { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--dim); padding:0 2px 2px; }
+#osk-preview { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--pri); }
+/* when the keyboard is up, keep the focused field visible above it */
+body.osk-open #app { padding-bottom:44vh; }
+
 /* ---- Modal (Wi-Fi, etc.) ---- */
 #modal { position: fixed; inset: 0; z-index: 600; display:flex; align-items:center; justify-content:center; background: rgba(0,0,0,0.75); }
 #modal .frame { background: var(--bg); width: min(520px, 90vw); max-height: 80vh; overflow:auto; margin:0; }
@@ -747,28 +773,11 @@ html[data-pointer="touch"], html[data-pointer="touch"] *,
       <!-- DRIVE = the diagnostics side (bailey): codes, link details, raw
            readouts, on-screen diagnostic. Driving info lives on HUD. -->
       <section id="tab-drive" class="tab">
-        <div class="frame" data-title="DRIVE // DIAGNOSTICS" style="height:100%; overflow-y:auto;">
+        <div class="frame" data-title="DIAGNOSTICS // TROUBLE CODES" style="height:100%; overflow-y:auto;">
           <div id="drive-notconnected" class="hidden">*** NOT CONNECTED ***</div>
           <div id="drive-live-banner"></div>
           <div class="frame" data-title="OBD LINK"><div id="drive-link-box" class="dim" style="font-size:13px;"></div></div>
           <div class="frame" data-title="VEHICLE"><div id="drive-vehicle-box" class="dim" style="font-size:14px;">Auto-detects from the VIN once the adapter links...</div></div>
-          <div class="frame" data-title="PERFORMANCE"><div id="drive-perf-box" style="font-size:13px;"></div></div>
-          <div class="frame" data-title="LIVE GRAPH">
-            <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px; flex-wrap:wrap;">
-              <select id="drive-graph-pid" data-focus style="font-size:12px;">
-                <option value="RPM">RPM</option>
-                <option value="SPEED">Speed (km/h)</option>
-                <option value="boost_psi">Boost (psi)</option>
-                <option value="ENGINE_LOAD">Engine Load %</option>
-                <option value="THROTTLE_POS">Throttle %</option>
-                <option value="COOLANT_TEMP">Coolant &deg;C</option>
-                <option value="mpg">MPG</option>
-                <option value="hp">HP (est)</option>
-              </select>
-              <span id="drive-graph-val" class="glow" style="font-size:14px;">--</span>
-            </div>
-            <canvas id="drive-graph" width="600" height="150" style="width:100%; height:150px; display:block; border:1px solid var(--line); background:var(--bg);"></canvas>
-          </div>
           <div class="frame" data-title="TROUBLE CODES"><div id="drive-dtc-box" style="font-size:13px;"></div></div>
           <div class="frame" data-title="TIRES (PSI)"><div id="drive-tires-box" style="font-size:13px;"></div></div>
           <div class="frame" data-title="LIVE DATA (RAW PIDS)"><div id="drive-raw-box" style="font-size:12px; font-family:inherit;"></div></div>
@@ -790,6 +799,23 @@ html[data-pointer="touch"], html[data-pointer="touch"] *,
         <div id="hud-mode" class="glow" style="text-align:center; font-size:20px; letter-spacing:2px; min-height:26px;"></div>
         <div id="hud-speed-wrap"></div>
         <div id="hud-gauges"></div>
+          <div class="frame" data-title="PERFORMANCE"><div id="drive-perf-box" style="font-size:13px;"></div></div>
+          <div class="frame" data-title="LIVE GRAPH">
+            <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px; flex-wrap:wrap;">
+              <select id="drive-graph-pid" data-focus style="font-size:12px;">
+                <option value="RPM">RPM</option>
+                <option value="SPEED">Speed (km/h)</option>
+                <option value="boost_psi">Boost (psi)</option>
+                <option value="ENGINE_LOAD">Engine Load %</option>
+                <option value="THROTTLE_POS">Throttle %</option>
+                <option value="COOLANT_TEMP">Coolant &deg;C</option>
+                <option value="mpg">MPG</option>
+                <option value="hp">HP (est)</option>
+              </select>
+              <span id="drive-graph-val" class="glow" style="font-size:14px;">--</span>
+            </div>
+            <canvas id="drive-graph" width="600" height="150" style="width:100%; height:150px; display:block; border:1px solid var(--line); background:var(--bg);"></canvas>
+          </div>
         <div id="hud-status-line"></div>
       </section>
 
@@ -1079,6 +1105,10 @@ html[data-pointer="touch"], html[data-pointer="touch"] *,
 
 
   <audio id="global-audio"></audio>
+
+  <!-- On-screen keyboard: auto-appears when you tap a text field and no
+       physical keyboard has been used (touchscreen-only head unit). -->
+  <div id="osk" class="hidden" aria-hidden="true"></div>
 </div>
 
 <script src="vendor/pmtiles.js"></script>
@@ -1093,7 +1123,7 @@ html[data-pointer="touch"], html[data-pointer="touch"] *,
 
 const TABS = ["home","drive","hud","vehicle","carplay","tv","music","nav","term","settings"];
 const TAB_LABELS = {
-  home:"HOME", drive:"DRIVE", hud:"HUD", vehicle:"VEHICLE", carplay:"CARPLAY", tv:"TV",
+  home:"HOME", drive:"DIAG", hud:"HUD", vehicle:"VEHICLE", carplay:"CARPLAY", tv:"TV",
   guide:"GUIDE", music:"MUSIC", nav:"NAV", term:"TERM", settings:"SETTINGS",
 };
 // CARPLAY only exists while a Carlinkit dongle is plugged in (backend scans USB).
@@ -1125,7 +1155,7 @@ const LS = {
 /* ------------------------------- config ---------------------------------- */
 const Config = {
   data: Object.assign({
-    setup_done: false, source_mode: "AUTO", theme: "gost", guide3: {}, dashcam: false, channel_names: {}, brightness: 100, gbc: false, dr: false, touch: false, crt: false, nav_voice: true, tv_volume: 100, tv_fill: false, music_volume: 100, music_shuffle: false, music_repeat: "off",
+    setup_done: false, source_mode: "AUTO", theme: "gost", guide3: {}, dashcam: false, channel_names: {}, brightness: 100, gbc: false, dr: false, touch: false, crt: false, nav_voice: true, tv_volume: 100, tv_fill: false, music_volume: 100, music_shuffle: false, music_repeat: "off", osk: "auto",
   }, LS.get("config", {})),
   save() { LS.set("config", this.data); },
   set(key, value, fromRemote) {
@@ -1136,6 +1166,180 @@ const Config = {
     if (key === "touch") applyTouch(value);
   },
 };
+
+/* ============================================================================
+ * ON-SCREEN KEYBOARD -- a head unit often has only a touchscreen, so tapping a
+ * text field with no physical keyboard attached must still let you type (Wi-Fi
+ * password, search, address...). Auto-shows unless a real keyboard is detected.
+ * ========================================================================== */
+const OSK = {
+  target: null, shift: false, caps: false, sym: false, hwKeyboard: false,
+  LAYOUT: {
+    letters: [
+      ["1","2","3","4","5","6","7","8","9","0"],
+      ["q","w","e","r","t","y","u","i","o","p"],
+      ["a","s","d","f","g","h","j","k","l"],
+      ["z","x","c","v","b","n","m"],
+    ],
+    symbols: [
+      ["1","2","3","4","5","6","7","8","9","0"],
+      ["!","@","#","$","%","^","&","*","(",")"],
+      ["-","_","=","+","[","]","{","}",";"],
+      [":","'","\"",",",".","/","?"],
+    ],
+  },
+  /** Should we pop up for this element? */
+  wants(el) {
+    if (!el || el.disabled || el.readOnly) return false;
+    const tag = (el.tagName || "").toLowerCase();
+    if (tag === "textarea") return true;
+    if (tag !== "input") return false;
+    return ["text", "password", "search", "url", "email", "number", "tel"].indexOf((el.type || "text").toLowerCase()) >= 0;
+  },
+  /** Auto-show policy: touch mode forces it; otherwise only when no physical
+   *  keyboard has been used and the last input was a touch. */
+  shouldAutoShow() {
+    if (Config.data.osk === "off") return false;
+    if (Config.data.osk === "always" || Config.data.touch) return true;
+    if (this.hwKeyboard) return false;
+    return document.documentElement.getAttribute("data-pointer") === "touch";
+  },
+  open(el) {
+    if (!this.wants(el)) return;
+    this.target = el;
+    this.sym = false; this.shift = false;
+    this.render();
+    $("#osk").classList.remove("hidden");
+    document.body.classList.add("osk-open");
+    try { el.scrollIntoView({ block: "center", behavior: "smooth" }); } catch (e) {}
+  },
+  close() {
+    $("#osk").classList.add("hidden");
+    document.body.classList.remove("osk-open");
+    this.target = null;
+  },
+  isOpen() { return !$("#osk").classList.contains("hidden"); },
+  label(ch) {
+    const up = this.shift || this.caps;
+    return up ? ch.toUpperCase() : ch;
+  },
+  render() {
+    const box = $("#osk");
+    box.innerHTML = "";
+    // status bar: what you're typing into + a live preview (passwords masked)
+    const bar = el("div", { id: "osk-bar" });
+    const t = this.target;
+    const name = t ? (t.getAttribute("placeholder") || t.id || "text") : "";
+    bar.appendChild(el("span", {}, [name.toUpperCase().slice(0, 22)]));
+    const prev = el("span", { id: "osk-preview" },
+      [t ? (t.type === "password" ? "•".repeat((t.value || "").length) : (t.value || "")) : ""]);
+    bar.appendChild(prev);
+    const hide = el("button", { class: "osk-key wide", style: "flex:0 0 auto;" }, ["▼ HIDE"]);
+    hide.addEventListener("pointerdown", (e) => { e.preventDefault(); this.close(); });
+    bar.appendChild(hide);
+    box.appendChild(bar);
+
+    const rows = this.sym ? this.LAYOUT.symbols : this.LAYOUT.letters;
+    rows.forEach((row, ri) => {
+      const r = el("div", { class: "osk-row" });
+      // shift lives on the last letter row
+      if (ri === rows.length - 1) {
+        const sh = el("button", { class: "osk-key wide" + ((this.shift || this.caps) ? " on" : "") },
+          [this.caps ? "⇪ CAPS" : "⇧ SHIFT"]);
+        sh.addEventListener("pointerdown", (e) => { e.preventDefault(); this.tapShift(); });
+        r.appendChild(sh);
+      }
+      row.forEach((ch) => {
+        const k = el("button", { class: "osk-key" }, [this.sym ? ch : this.label(ch)]);
+        k.addEventListener("pointerdown", (e) => { e.preventDefault(); this.type(this.sym ? ch : this.label(ch)); });
+        r.appendChild(k);
+      });
+      if (ri === rows.length - 1) {
+        const bs = el("button", { class: "osk-key wide" }, ["⌫"]);
+        bs.addEventListener("pointerdown", (e) => { e.preventDefault(); this.backspace(); });
+        r.appendChild(bs);
+      }
+      box.appendChild(r);
+    });
+
+    const last = el("div", { class: "osk-row" });
+    const sym = el("button", { class: "osk-key wide" }, [this.sym ? "ABC" : "?123"]);
+    sym.addEventListener("pointerdown", (e) => { e.preventDefault(); this.sym = !this.sym; this.render(); });
+    const dot = el("button", { class: "osk-key" }, ["."]);
+    dot.addEventListener("pointerdown", (e) => { e.preventDefault(); this.type("."); });
+    const space = el("button", { class: "osk-key space" }, ["SPACE"]);
+    space.addEventListener("pointerdown", (e) => { e.preventDefault(); this.type(" "); });
+    const at = el("button", { class: "osk-key" }, ["@"]);
+    at.addEventListener("pointerdown", (e) => { e.preventDefault(); this.type("@"); });
+    const go = el("button", { class: "osk-key wide go" }, ["⏎ DONE"]);
+    go.addEventListener("pointerdown", (e) => { e.preventDefault(); this.enter(); });
+    [sym, dot, space, at, go].forEach((b) => last.appendChild(b));
+    box.appendChild(last);
+  },
+  tapShift() {
+    // tap = one-shot shift, double-tap (while shifted) = caps lock
+    if (this.shift && !this.caps) { this.caps = true; this.shift = false; }
+    else if (this.caps) { this.caps = false; this.shift = false; }
+    else this.shift = true;
+    this.render();
+  },
+  /** Insert at the caret and fire a real `input` event so existing listeners
+   *  (search-as-you-type, validation) behave exactly as with a real keyboard. */
+  type(ch) {
+    const t = this.target;
+    if (!t) return;
+    const s = t.selectionStart != null ? t.selectionStart : (t.value || "").length;
+    const e = t.selectionEnd != null ? t.selectionEnd : s;
+    const v = t.value || "";
+    t.value = v.slice(0, s) + ch + v.slice(e);
+    try { t.setSelectionRange(s + ch.length, s + ch.length); } catch (err) {}
+    t.dispatchEvent(new Event("input", { bubbles: true }));
+    if (this.shift && !this.caps) { this.shift = false; this.render(); }
+    else this.refreshPreview();
+  },
+  backspace() {
+    const t = this.target;
+    if (!t) return;
+    let s = t.selectionStart != null ? t.selectionStart : (t.value || "").length;
+    let e = t.selectionEnd != null ? t.selectionEnd : s;
+    const v = t.value || "";
+    if (s === e) { if (s === 0) return; s -= 1; }
+    t.value = v.slice(0, s) + v.slice(e);
+    try { t.setSelectionRange(s, s); } catch (err) {}
+    t.dispatchEvent(new Event("input", { bubbles: true }));
+    this.refreshPreview();
+  },
+  enter() {
+    const t = this.target;
+    if (t) {
+      // let forms that submit on Enter (search, Wi-Fi join) do their thing
+      t.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      t.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    this.close();
+  },
+  refreshPreview() {
+    const p = $("#osk-preview"), t = this.target;
+    if (p && t) p.textContent = t.type === "password" ? "•".repeat((t.value || "").length) : (t.value || "");
+  },
+};
+// A real keydown from a physical keyboard turns auto-popup off for the session.
+addEventListener("keydown", (e) => {
+  if (e.isTrusted && !OSK.isOpen()) OSK.hwKeyboard = true;
+}, true);
+addEventListener("focusin", (e) => {
+  if (OSK.wants(e.target) && OSK.shouldAutoShow()) OSK.open(e.target);
+});
+addEventListener("focusout", (e) => {
+  // closing on blur would fire when tapping a key, so only close if focus
+  // genuinely left the field for something that isn't the keyboard
+  setTimeout(() => {
+    if (!OSK.isOpen()) return;
+    const a = document.activeElement;
+    if (a && OSK.wants(a)) { OSK.target = a; OSK.render(); return; }
+    if (!$("#osk").contains(a)) OSK.close();
+  }, 60);
+});
 
 /* Touch mode: enlarge tap targets for the 7" touchscreen (data-touch on <html>). */
 function applyTouch(on) { document.documentElement.toggleAttribute("data-touch", !!on); }
@@ -2088,7 +2292,7 @@ function buildHome() {
   const list = $("#home-list");
   list.innerHTML = "";
   const descs = {
-    drive: "Diagnostics -- OBD link, trouble codes, raw PIDs",
+    drive: "Diagnostics -- trouble codes, OBD link, raw PIDs",
     hud: "Driving screen -- speed, mode, fuel, range, gauges",
     vehicle: "Body status -- doors, hood, tailgate diagram",
     carplay: "Phone projection -- Carlinkit dongle detected",
@@ -2218,7 +2422,6 @@ function renderDrive(t) {
       tiles.map(function (kv) { return '<div style="text-align:center;"><div class="dim" style="font-size:10px;letter-spacing:1px;">' + kv[0] + '</div><div class="glow" style="font-size:18px;">' + kv[1] + '</div></div>'; }).join('') +
       '</div>';
   }
-  LiveGraph.push(t);
   const dtcBox = $("#drive-dtc-box");
   if (dtcBox) {
     dtcBox.innerHTML = "";
@@ -2285,6 +2488,7 @@ function renderDrive(t) {
  * ========================================================================== */
 const HudGhost = { history: [] };
 function renderHud(t) {
+  LiveGraph.push(t);          // the live graph lives on the driving screen
   // --- DRIVING VIEW (bailey: "the hud is where the driving information
   // should be") -- big speed, engine/battery mode, fuel + range, gauges.
   const v = (t && t.values) || {}, d = (t && t.derived) || {};
@@ -4783,6 +4987,15 @@ function buildSettings() {
   const touchToggle = el("button", { "data-focus": "", id: "touch-toggle", style: "margin-top:10px" }, [touchLabel()]);
   touchToggle.addEventListener("click", () => { Config.set("touch", !Config.data.touch); touchToggle.textContent = touchLabel(); });
   swatches.parentElement.appendChild(touchToggle);
+  // On-screen keyboard: auto (only when no physical keyboard) / always / off
+  const oskLabel = () => ({ auto: "[ ON-SCREEN KEYBOARD: AUTO ]",
+    always: "[ ON-SCREEN KEYBOARD: ALWAYS ]", off: "[ ON-SCREEN KEYBOARD: OFF ]" })[Config.data.osk || "auto"];
+  const oskToggle = el("button", { "data-focus": "", id: "osk-toggle", style: "margin-top:10px" }, [oskLabel()]);
+  oskToggle.addEventListener("click", () => {
+    Config.set("osk", { auto: "always", always: "off", off: "auto" }[Config.data.osk || "auto"]);
+    oskToggle.textContent = oskLabel();
+  });
+  swatches.parentElement.appendChild(oskToggle);
   $("#src-auto-btn").addEventListener("click", () => setSourceMode("AUTO"));
   $("#src-demo-btn").addEventListener("click", () => setSourceMode("DEMO"));
   const setVeh = (key, val) => {
