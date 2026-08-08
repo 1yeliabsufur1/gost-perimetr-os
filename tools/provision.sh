@@ -32,7 +32,7 @@ apt-get install -y \
   cage seatd \
   network-manager rsync curl git i2c-tools rfkill \
   bluez bluez-tools \
-  espeak-ng \
+  espeak-ng avahi-daemon \
   fonts-dejavu-core fonts-noto-mono
 
 # liblgpio-dev is Pi-OS-only (lgpio wheel builds against -llgpio on py3.13);

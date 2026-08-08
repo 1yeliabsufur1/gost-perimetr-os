@@ -258,6 +258,11 @@ systemctl enable obd-rfcomm.service 2>/dev/null || true
 # Force the Wi-Fi radio on at every boot (bailey: it boots soft-disabled).
 install -m0644 "$GOST_HOME/system/gost-net.service" /etc/systemd/system/gost-net.service
 systemctl enable gost-net.service 2>/dev/null || true
+# Wi-Fi watchdog: re-assert power-save-off, reconnect on drop, keep mDNS up so
+# the truck stops falling off the network mid-session (bailey, repeatedly).
+chmod +x "$GOST_HOME/system/gost-wifi-watchdog.sh" 2>/dev/null || true
+install -m0644 "$GOST_HOME/system/gost-wifi-watchdog.service" /etc/systemd/system/gost-wifi-watchdog.service
+systemctl enable gost-wifi-watchdog.service 2>/dev/null || true
 # Kill Wi-Fi power-save permanently -- the radio sleeping when idle drops the
 # connection mid-session (bailey 2026-07-14). This makes it stick across
 # reconnects/reboots at the NetworkManager level.

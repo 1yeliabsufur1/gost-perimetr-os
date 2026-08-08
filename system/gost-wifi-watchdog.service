@@ -1,0 +1,13 @@
+[Unit]
+Description=GOST Wi-Fi watchdog (power-save off + auto-reconnect + mDNS)
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=simple
+ExecStart=/opt/gost/system/gost-wifi-watchdog.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
