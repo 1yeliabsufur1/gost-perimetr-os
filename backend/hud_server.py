@@ -39,8 +39,7 @@ APP_DIR = Path(os.environ.get("GOST_APP", str(BASE_DIR / "app")))
 MEDIA_DIR = Path(os.environ.get("GOST_MEDIA", str(BASE_DIR / "media")))
 MAPS_DIR = Path(os.environ.get("GOST_MAPS", str(BASE_DIR / "maps")))
 STATE_DIR = Path(os.environ.get("GOST_STATE", str(BASE_DIR / "state")))
-ROMS_DIR = Path(os.environ.get("GOST_ROMS", str(BASE_DIR / "roms")))   # user drops game ROMs here
-for _d in (STATE_DIR, MAPS_DIR, ROMS_DIR):
+for _d in (STATE_DIR, MAPS_DIR):
     try:
         _d.mkdir(parents=True, exist_ok=True)
     except Exception:
@@ -197,10 +196,64 @@ class DurationCache:
             log("duration cache save failed:", e)
 
 
+_USB_ROOTS = ("/media", "/run/media", "/mnt")
+
+
+_LAST_USB_MOUNT = [0.0]
+
+
+def _mount_usb_drives():
+    """The kiosk has no desktop auto-mounter, so a plugged-in USB stick is never
+    mounted and the ROM/media scan finds nothing (bailey: "only system storage").
+    Find unmounted removable partitions and mount them read-only under
+    /media/gost-usb-* (operator has NOPASSWD sudo). Returns the mount points.
+    Throttled: media + map scans both call this on every library refresh, and
+    probing lsblk each time is pure overhead (and log spam)."""
+    mounts = []
+    now = time.time()
+    if now - _LAST_USB_MOUNT[0] < 10:
+        return mounts
+    _LAST_USB_MOUNT[0] = now
+    try:
+        proc = subprocess.run(
+            ["lsblk", "-rno", "NAME,TYPE,RM,MOUNTPOINT,FSTYPE"],
+            capture_output=True, text=True, timeout=10)
+        for line in proc.stdout.splitlines():
+            f = line.split(" ")
+            if len(f) < 3:
+                continue
+            name, typ, rm = f[0], f[1], f[2]
+            mnt = f[3] if len(f) > 3 else ""
+            fstype = f[4] if len(f) > 4 else ""
+            if typ != "part" or rm != "1" or mnt or not fstype:
+                continue                      # only unmounted removable partitions
+            dev = "/dev/" + name
+            mp = "/media/gost-usb-" + name
+            try:
+                os.makedirs(mp, exist_ok=True)
+                opts = "ro,noatime,uid=%d,gid=%d" % (os.getuid(), os.getgid()) \
+                    if fstype in ("vfat", "exfat", "ntfs") else "ro,noatime"
+                r = subprocess.run(["sudo", "-n", "mount", "-o", opts, dev, mp],
+                                   capture_output=True, text=True, timeout=15)
+                if r.returncode == 0:
+                    mounts.append(mp)
+                    log("mounted USB", dev, "->", mp)
+            except Exception as e:
+                log("usb mount failed", dev, e)
+    except Exception as e:
+        log("lsblk failed:", e)
+    return mounts
+
+
+
 # --------------------------------------------------------- media library ----
 
 def extra_media_roots():
-    """USB sticks mounted with a TV/ or MUSIC/ folder at their top level."""
+    """USB sticks with a TV/ or MUSIC/ folder at their top level. The kiosk has
+    no desktop auto-mounter, so mount any unmounted removable partition first --
+    otherwise a plugged-in stick never appears under /media and media import
+    silently finds nothing."""
+    _mount_usb_drives()
     roots = []
     for base in (Path("/media"), Path("/mnt")):
         if not base.is_dir():
@@ -326,6 +379,7 @@ def link_usb_maps():
     automatically: symlinked into MAPS_DIR (no copying gigabytes to the SD),
     dead links pruned when the stick is unplugged."""
     try:
+        _mount_usb_drives()          # kiosk has no auto-mounter -- mount it first
         MAPS_DIR.mkdir(parents=True, exist_ok=True)
         for p in MAPS_DIR.iterdir():
             if p.is_symlink() and not p.exists():
@@ -3085,227 +3139,6 @@ async def youtube_more(token):
         return {"results": [], "token": None}
 
 
-# -------------------------------------------------------------- games/emu ----
-# RetroArch front-end. We ship NO ROMs (legal); the user drops their own game
-# files in ROMS_DIR (via USB/TERM) and we map extension -> libretro core.
-# Unambiguous extension -> (system label, libretro core). Ambiguous disc formats
-# (.iso/.cue/.chd...) are resolved by SYSTEM FOLDER instead (RetroPie convention).
-_ROM_CORES = {
-    ".nes": ("NES", "fceumm"), ".fds": ("FAMICOM DISK", "fceumm"), ".unf": ("NES", "fceumm"),
-    ".sfc": ("SUPER NES", "snes9x"), ".smc": ("SUPER NES", "snes9x"),
-    ".gb": ("GAME BOY", "gambatte"), ".gbc": ("GAME BOY COLOR", "gambatte"), ".sgb": ("SUPER GAME BOY", "gambatte"),
-    ".gba": ("GAME BOY ADVANCE", "mgba"), ".nds": ("NINTENDO DS", "desmume"), ".vb": ("VIRTUAL BOY", "mednafen_vb"),
-    ".n64": ("NINTENDO 64", "mupen64plus_next"), ".z64": ("NINTENDO 64", "mupen64plus_next"), ".v64": ("NINTENDO 64", "mupen64plus_next"),
-    ".md": ("SEGA GENESIS", "genesis_plus_gx"), ".gen": ("SEGA GENESIS", "genesis_plus_gx"),
-    ".smd": ("SEGA GENESIS", "genesis_plus_gx"), ".sms": ("MASTER SYSTEM", "genesis_plus_gx"),
-    ".gg": ("GAME GEAR", "genesis_plus_gx"), ".32x": ("SEGA 32X", "picodrive"),
-    ".pce": ("PC ENGINE", "mednafen_pce_fast"), ".sgx": ("SUPERGRAFX", "mednafen_pce_fast"),
-    ".ngp": ("NEO GEO POCKET", "mednafen_ngp"), ".ngc": ("NEO GEO POCKET", "mednafen_ngp"),
-    ".ws": ("WONDERSWAN", "mednafen_wswan"), ".wsc": ("WONDERSWAN COLOR", "mednafen_wswan"),
-    ".a26": ("ATARI 2600", "stella"), ".a78": ("ATARI 7800", "prosystem"),
-    ".lnx": ("ATARI LYNX", "handy"), ".j64": ("ATARI JAGUAR", "virtualjaguar"),
-    ".col": ("COLECOVISION", "bluemsx"), ".int": ("INTELLIVISION", "freeintv"),
-    ".d64": ("COMMODORE 64", "vice_x64"), ".t64": ("COMMODORE 64", "vice_x64"), ".adf": ("AMIGA", "puae"),
-    ".pbp": ("PLAYSTATION", "pcsx_rearmed"), ".gdi": ("DREAMCAST", "flycast"), ".cdi": ("DREAMCAST", "flycast"),
-    ".iso": ("PSP", "ppsspp"), ".cso": ("PSP", "ppsspp"), ".zip": ("ARCADE", "fbneo"), ".7z": ("ARCADE", "fbneo"),
-}
-# Drop ROMs in roms/<system>/ and the FOLDER decides the console (needed for
-# shared extensions: a .cue in roms/psx/ = PlayStation, in roms/segacd/ = Sega CD).
-_SYSTEM_FOLDERS = {
-    "nes": ("NES", "fceumm"), "snes": ("SUPER NES", "snes9x"), "sfc": ("SUPER NES", "snes9x"),
-    "gb": ("GAME BOY", "gambatte"), "gbc": ("GAME BOY COLOR", "gambatte"), "gba": ("GAME BOY ADVANCE", "mgba"),
-    "n64": ("NINTENDO 64", "mupen64plus_next"), "nds": ("NINTENDO DS", "desmume"),
-    "gc": ("GAMECUBE", "dolphin"), "gamecube": ("GAMECUBE", "dolphin"), "wii": ("WII", "dolphin"),
-    "genesis": ("SEGA GENESIS", "genesis_plus_gx"), "megadrive": ("SEGA GENESIS", "genesis_plus_gx"),
-    "sms": ("MASTER SYSTEM", "genesis_plus_gx"), "mastersystem": ("MASTER SYSTEM", "genesis_plus_gx"),
-    "gamegear": ("GAME GEAR", "genesis_plus_gx"), "gg": ("GAME GEAR", "genesis_plus_gx"),
-    "segacd": ("SEGA CD", "genesis_plus_gx"), "sega32x": ("SEGA 32X", "picodrive"), "32x": ("SEGA 32X", "picodrive"),
-    "saturn": ("SEGA SATURN", "mednafen_saturn"), "dreamcast": ("DREAMCAST", "flycast"), "dc": ("DREAMCAST", "flycast"),
-    "psx": ("PLAYSTATION", "pcsx_rearmed"), "ps1": ("PLAYSTATION", "pcsx_rearmed"), "playstation": ("PLAYSTATION", "pcsx_rearmed"),
-    "psp": ("PSP", "ppsspp"), "ps2": ("PLAYSTATION 2", "pcsx2"),
-    "pcengine": ("PC ENGINE", "mednafen_pce_fast"), "tg16": ("TURBOGRAFX-16", "mednafen_pce_fast"),
-    "neogeo": ("NEO GEO", "fbneo"), "arcade": ("ARCADE", "fbneo"), "mame": ("ARCADE", "mame2003_plus"), "fbneo": ("ARCADE", "fbneo"),
-    "atari2600": ("ATARI 2600", "stella"), "atari7800": ("ATARI 7800", "prosystem"),
-    "lynx": ("ATARI LYNX", "handy"), "jaguar": ("ATARI JAGUAR", "virtualjaguar"),
-    "wonderswan": ("WONDERSWAN", "mednafen_wswan"), "ngp": ("NEO GEO POCKET", "mednafen_ngp"),
-    "c64": ("COMMODORE 64", "vice_x64"), "amiga": ("AMIGA", "puae"), "msx": ("MSX", "bluemsx"),
-    "dos": ("MS-DOS", "dosbox_pure"), "colecovision": ("COLECOVISION", "bluemsx"),
-    "intellivision": ("INTELLIVISION", "freeintv"), "3do": ("3DO", "opera"), "virtualboy": ("VIRTUAL BOY", "mednafen_vb"),
-}
-# disc/image extensions that only make sense once a system folder disambiguates them
-_DISC_EXTS = {".iso", ".cue", ".bin", ".chd", ".cso", ".pbp", ".gdi", ".cdi", ".m3u", ".img", ".rom",
-              ".rvz", ".wbfs", ".gcm", ".gcz", ".wia", ".wad"}   # GameCube/Wii disc formats
-_PLAYABLE_EXTS = set(_ROM_CORES) | _DISC_EXTS
-# Filenames that are unambiguously GameCube/Wii regardless of folder (Dolphin
-# handles these; .nkit.iso in particular looks like a plain .iso by suffix).
-_DOLPHIN_NAME_RE = re.compile(r"\.(nkit\.iso|nkit\.gcz|rvz|wbfs|gcm|gcz|wia|wad)$", re.I)
-
-
-def _system_for(path):
-    """(system, core) for a ROM: folder wins (disambiguates disc formats), else extension."""
-    p = Path(path)
-    if _DOLPHIN_NAME_RE.search(p.name):            # .nkit.iso / .rvz / .wbfs ... = GameCube/Wii
-        return ("GAMECUBE / WII", "dolphin")
-    if p.suffix.lower() not in _PLAYABLE_EXTS:
-        return None
-    for part in p.parts[:-1]:                      # any parent folder named after a system
-        m = _SYSTEM_FOLDERS.get(part.lower())
-        if m:
-            return m
-    return _ROM_CORES.get(p.suffix.lower())         # else the unambiguous extension map
-
-
-def games_list():
-    roms = []
-    try:
-        for p in sorted(ROMS_DIR.rglob("*")):
-            if not p.is_file():
-                continue
-            meta = _system_for(p)
-            if not meta:
-                continue
-            url = "/roms/" + quote(p.relative_to(ROMS_DIR).as_posix())
-            roms.append({"path": str(p), "url": url, "name": p.stem, "system": meta[0], "core": meta[1]})
-            if len(roms) >= 1000:
-                break
-    except Exception as e:
-        log("games_list failed:", e)
-    return roms
-
-
-async def launch_native_game(state, rel):
-    """Boot a GameCube/Wii game in native Dolphin by starting gost-game.service,
-    which Conflicts=hud-kiosk so the dashboard yields the screen (and restores it
-    when Dolphin exits). `rel` is the /roms/-relative path, confined to ROMS_DIR."""
-    try:
-        rel = unquote((rel or "").lstrip("/"))
-        if rel.startswith("roms/"):
-            rel = rel[len("roms/"):]
-        target = (ROMS_DIR / rel).resolve()
-        try:
-            target.relative_to(ROMS_DIR.resolve())      # no escaping ROMS_DIR
-        except ValueError:
-            return {"ok": False, "detail": "invalid game path"}
-        if not target.is_file():
-            return {"ok": False, "detail": "game not on device -- import it from USB first"}
-        if not shutil.which("dolphin-emu", path="/usr/games:/usr/bin:/usr/local/bin:/bin"):
-            return {"ok": False, "detail": "Dolphin isn't installed on this device"}
-        (STATE_DIR / "game-target").write_text(str(target))
-        p = await asyncio.create_subprocess_exec(
-            "sudo", "-n", "systemctl", "start", "gost-game.service",
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
-        out, _ = await asyncio.wait_for(p.communicate(), timeout=25)
-        if p.returncode == 0:
-            return {"ok": True, "detail": "launching " + target.name + " in Dolphin"}
-        return {"ok": False, "detail": (out or b"").decode(errors="ignore")[:200] or "failed to start game"}
-    except Exception as e:
-        return {"ok": False, "detail": str(e)[:200]}
-
-
-async def stop_native_game():
-    try:
-        p = await asyncio.create_subprocess_exec(
-            "sudo", "-n", "systemctl", "stop", "gost-game.service",
-            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-        await asyncio.wait_for(p.wait(), timeout=20)
-        return {"ok": True}
-    except Exception as e:
-        return {"ok": False, "detail": str(e)[:120]}
-
-
-# Removable-media mount roots to scan for ROMs (Linux/Pi). USB sticks auto-mount
-# under these; on Windows these don't exist so import cleanly finds nothing.
-_USB_ROOTS = ("/media", "/run/media", "/mnt")
-
-
-def _mount_usb_drives():
-    """The kiosk has no desktop auto-mounter, so a plugged-in USB stick is never
-    mounted and the ROM/media scan finds nothing (bailey: "only system storage").
-    Find unmounted removable partitions and mount them read-only under
-    /media/gost-usb-* (operator has NOPASSWD sudo). Returns the mount points."""
-    mounts = []
-    try:
-        proc = subprocess.run(
-            ["lsblk", "-rno", "NAME,TYPE,RM,MOUNTPOINT,FSTYPE"],
-            capture_output=True, text=True, timeout=10)
-        for line in proc.stdout.splitlines():
-            f = line.split(" ")
-            if len(f) < 3:
-                continue
-            name, typ, rm = f[0], f[1], f[2]
-            mnt = f[3] if len(f) > 3 else ""
-            fstype = f[4] if len(f) > 4 else ""
-            if typ != "part" or rm != "1" or mnt or not fstype:
-                continue                      # only unmounted removable partitions
-            dev = "/dev/" + name
-            mp = "/media/gost-usb-" + name
-            try:
-                os.makedirs(mp, exist_ok=True)
-                opts = "ro,noatime,uid=%d,gid=%d" % (os.getuid(), os.getgid()) \
-                    if fstype in ("vfat", "exfat", "ntfs") else "ro,noatime"
-                r = subprocess.run(["sudo", "-n", "mount", "-o", opts, dev, mp],
-                                   capture_output=True, text=True, timeout=15)
-                if r.returncode == 0:
-                    mounts.append(mp)
-                    log("mounted USB", dev, "->", mp)
-            except Exception as e:
-                log("usb mount failed", dev, e)
-    except Exception as e:
-        log("lsblk failed:", e)
-    return mounts
-
-
-def import_usb_roms():
-    """Copy recognizable ROMs off any mounted USB drive into ROMS_DIR.
-    Preserves a system subfolder when the stick already uses the roms/<system>/
-    convention (so disc formats keep resolving). Returns {ok,count,found,detail}."""
-    copied, found, scanned = 0, 0, 0
-    _mount_usb_drives()          # mount the stick first -- kiosk has no auto-mounter
-    try:
-        for root in _USB_ROOTS:
-            r = Path(root)
-            if not r.is_dir():
-                continue
-            for p in r.rglob("*"):
-                scanned += 1
-                if scanned > 60000:      # guard against a huge drive
-                    break
-                try:
-                    if not p.is_file() or ROMS_DIR in p.parents:
-                        continue
-                except OSError:
-                    continue
-                meta = _system_for(p)
-                if not meta:
-                    continue
-                found += 1
-                sysfolder = next((part for part in p.parts[:-1]
-                                  if part.lower() in _SYSTEM_FOLDERS), None)
-                dest_dir = (ROMS_DIR / sysfolder) if sysfolder else ROMS_DIR
-                dest = dest_dir / p.name
-                if dest.exists():
-                    continue
-                try:
-                    dest_dir.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(p, dest)
-                    copied += 1
-                except Exception as e:
-                    log("usb rom copy failed:", p, e)
-                if copied >= 1000:
-                    break
-    except Exception as e:
-        return {"ok": False, "count": copied, "found": found, "detail": str(e)}
-    if found == 0:
-        return {"ok": False, "count": 0, "found": 0,
-                "detail": "no USB drive with recognizable ROMs found (looked in /media, /run/media, /mnt)"}
-    detail = ("imported %d new ROM(s)" % copied) if copied else "USB found, but all %d ROM(s) already imported" % found
-    return {"ok": True, "count": copied, "found": found, "detail": detail}
-
-
-async def games_import_usb():
-    return await asyncio.get_event_loop().run_in_executor(None, import_usb_roms)
-
-
 async def route_message(state: GostState, ws, msg):
     t = msg.get("type")
     if t == "tv.tune":
@@ -3331,12 +3164,6 @@ async def route_message(state: GostState, ws, msg):
         await ws.send(json.dumps({"type": "app.launch", "ok": bool(ok), "url": msg.get("url")}))
     elif t == "app.kill":
         await state.kill_apps()
-    elif t == "games.list":
-        await ws.send(json.dumps({"type": "games.list", "roms": games_list(), "dir": str(ROMS_DIR)}))
-    elif t == "games.import":
-        res = await games_import_usb()
-        await ws.send(json.dumps({"type": "games.import", **res}))
-        await ws.send(json.dumps({"type": "games.list", "roms": games_list(), "dir": str(ROMS_DIR)}))
     elif t == "youtube.search":
         q = (msg.get("query") or "").strip()
         r = await youtube_search(q) if q else {"results": [], "token": None}
@@ -3444,10 +3271,6 @@ async def route_message(state: GostState, ws, msg):
         await ws.send(json.dumps({"type": "nav.route", **await nav_route(msg.get("start"), msg.get("dest"))}))
     elif t == "nav.speak":
         await nav_speak(msg.get("text"))
-    elif t == "game.native":
-        await ws.send(json.dumps({"type": "game.native", **await launch_native_game(state, msg.get("path"))}))
-    elif t == "game.stop":
-        await ws.send(json.dumps({"type": "game.stop", **await stop_native_game()}))
     elif t == "system.info":
         await ws.send(json.dumps({"type": "system.info", **system_info()}))
 
@@ -3532,8 +3355,6 @@ def resolve_fs_path(url_path: str):
         base, rel = MEDIA_DIR, clean[len("/media/"):]
     elif clean.startswith("/maps/"):
         base, rel = MAPS_DIR, clean[len("/maps/"):]
-    elif clean.startswith("/roms/"):
-        base, rel = ROMS_DIR, clean[len("/roms/"):]   # served to the in-browser emulator
     else:
         base, rel = APP_DIR, clean.lstrip("/")
     target = (base / rel).resolve()
