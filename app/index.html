@@ -673,7 +673,6 @@ html[data-pointer="touch"], html[data-pointer="touch"] *,
         </div>
       </section>
 
-           fills themselves (USB/TERM); we bundle NO ROMs. BACK exits the game. -->
       <section id="tab-nav" class="tab">
         <!-- Big amber weather readout over the map (bailey); driven by the
              same Weather module as the corner widget, degrades identically. -->
@@ -921,7 +920,7 @@ const LS = {
 /* ------------------------------- config ---------------------------------- */
 const Config = {
   data: Object.assign({
-    setup_done: false, source_mode: "AUTO", theme: "gost", guide3: {}, dashcam: false, channel_names: {}, brightness: 100, gbc: false, dr: false, touch: false, crt: false,
+    setup_done: false, source_mode: "AUTO", theme: "gost", guide3: {}, dashcam: false, channel_names: {}, brightness: 100, gbc: false, dr: false, touch: false, crt: false, nav_voice: true,
   }, LS.get("config", {})),
   save() { LS.set("config", this.data); },
   set(key, value, fromRemote) {
@@ -1294,6 +1293,7 @@ const Net = {
     }
     else if (msg.type === "ssh.status" || msg.type === "ssh.set") { Sys.onSshStatus(msg); }
     else if (msg.type === "geocode") { Nav.onGeocode(msg); }
+    else if (msg.type === "nav.route") { Nav.onRoute(msg); }
     else if (msg.type === "clock.set") { $("#clock-set-result").textContent = msg.ok ? "CLOCK SET" : "FAILED -- CHECK DEVICE LOGS"; }
     else if (msg.type === "system.info") { renderAbout(msg); }
     else if (msg.type === "youtube.results") { YT.onResults(msg); }
@@ -1897,10 +1897,6 @@ function buildHome() {
   }
 }
 
-/* ============================================================================
- * scans a roms/ folder the user fills (USB/TERM) and launches RetroArch, which
- * (like the app overlay) is killed by the universal BACK to return to the unit.
- * ========================================================================== */
 /* Live rolling graph of one OBD value (RPM/boost/etc.) in the DRIVE tab. */
 const LiveGraph = {
   buf: [], max: 150, pid: "RPM",
@@ -3623,6 +3619,43 @@ class MinHeap {
   }
 }
 
+/* ---- OSRM maneuver -> human turn instruction + arrow + US-unit distance ---- */
+function osrmInstruction(s) {
+  const t = s.type || "", mod = s.modifier || "", name = s.name || "";
+  const onto = name ? " onto " + name : "";
+  const d = { "slight left": "slightly left", "slight right": "slightly right",
+    "sharp left": "hard left", "sharp right": "hard right", "uturn": "around" }[mod] || mod;
+  switch (t) {
+    case "depart": return "Head out" + (name ? " on " + name : "");
+    case "turn": return "Turn " + (d || "") + onto;
+    case "new name": return "Continue" + onto;
+    case "continue": return "Continue " + (d ? d + " " : "") + (name ? "on " + name : "");
+    case "merge": return "Merge " + (d ? d + " " : "") + onto;
+    case "on ramp": return "Take the ramp" + (d ? " on the " + d : "") + onto;
+    case "off ramp": return "Take the exit" + (d ? " on the " + d : "") + onto;
+    case "fork": return "Keep " + (d || "straight") + onto;
+    case "end of road": return "Turn " + (d || "") + onto;
+    case "roundabout": case "rotary": return "Take the roundabout" + (s.exit ? " (exit " + s.exit + ")" : "") + onto;
+    case "roundabout turn": return "At the roundabout, turn " + (d || "") + onto;
+    case "arrive": return "Arrive" + (name ? " at " + name : " at destination");
+    default: return (t ? t.charAt(0).toUpperCase() + t.slice(1) : "Continue") + onto;
+  }
+}
+function maneuverArrow(s) {
+  const t = s.type || "", mod = s.modifier || "";
+  if (t === "arrive") return "◉";                       // ◉ destination
+  if (t === "roundabout" || t === "rotary") return "↻"; // ↻
+  return ({ "left": "←", "right": "→", "slight left": "↖",
+    "slight right": "↗", "sharp left": "↰", "sharp right": "↱",
+    "straight": "↑", "uturn": "↶" })[mod] || "↑";
+}
+function fmtDist(m) {
+  if (m == null || isNaN(m)) return "";
+  const ft = m * 3.28084;
+  if (ft < 1000) return Math.max(0, Math.round(ft / 50) * 50) + " ft";
+  return (m / 1609.34).toFixed(1) + " mi";
+}
+
 /** features: GeoJSON-ish [{geometry:{type,coordinates}, properties:{kind,name}}] */
 function buildRoadGraph(features) {
   const nodes = new Map();
@@ -3899,7 +3932,12 @@ const Nav = {
     if (this.map && this.puck) {
       try {
         this.puck.setLngLat([lon, lat]).addTo(this.map);
-        if (!this.routeCoords) this.map.easeTo({ center: [lon, lat], duration: 400 });
+        if (this.routeCoords && !this.mapMode) {
+          // navigating: follow the puck at a driving zoom (CarPlay-style)
+          this.map.easeTo({ center: [lon, lat], zoom: Math.max(this.map.getZoom(), 15.5), duration: 800 });
+        } else if (!this.routeCoords) {
+          this.map.easeTo({ center: [lon, lat], duration: 400 });
+        }
       } catch (e) {}
     }
     if (this.routeCoords) this.updateProgress(lat, lon);
@@ -3995,33 +4033,84 @@ const Nav = {
     const start = this.startOverride ? this.startOverride
       : this.lastFix ? [this.lastFix.lon, this.lastFix.lat]
       : [this.map.getCenter().lng, this.map.getCenter().lat];
+    this._routeStart = start;
+    // HYBRID routing: real road routing via the backend (OSRM) when connected,
+    // else the self-contained offline tile-graph router.
+    if (Net.connected) {
+      this.showTurnBanner("ROUTING…");
+      Net.send({ type: "nav.route", start: start, dest: this.destLngLat });
+      clearTimeout(this._routeTimer);
+      this._routeTimer = setTimeout(() => { if (!this.routeCoords) this.computeOffline(start); }, 7000);
+    } else {
+      this.computeOffline(start);
+    }
+  },
+  onRoute(msg) {   // OSRM reply from the backend
+    clearTimeout(this._routeTimer);
+    if (!msg || !msg.ok || !msg.coords || !msg.coords.length) { this.computeOffline(this._routeStart); return; }
+    this.renderOnlineRoute(msg);
+  },
+  computeOffline(start) {
+    if (!this.map || !this.destLngLat) return;
+    start = start || this._routeStart;
     const graph = buildRoadGraph(this.map.querySourceFeatures("p", { sourceLayer: "roads" }));
     if (!graph.nodeCount) {
-      this.showTurnBanner("NO ROAD DATA IN VIEW -- PAN/ZOOM SO THE ROUTE AREA IS LOADED, THEN SET DESTINATION AGAIN");
+      this.showTurnBanner("NO ROAD DATA IN VIEW -- PAN/ZOOM SO THE ROUTE AREA LOADS, THEN SET DESTINATION AGAIN");
       return;
     }
     const path = routeGraph(graph, start, this.destLngLat);
-    if (!path) {
-      this.showTurnBanner("NO ROUTE FOUND IN CURRENTLY LOADED MAP DATA");
-      return;
-    }
+    if (!path) { this.showTurnBanner("NO ROUTE IN LOADED MAP DATA (offline)"); return; }
     this.renderRoute(path);
   },
-  renderRoute(path) {
+  _drawRouteLine(coords) {
+    const geojson = { type: "Feature", geometry: { type: "LineString", coordinates: coords } };
+    if (this.map.getSource("route")) { this.map.getSource("route").setData(geojson); return; }
+    this.map.addSource("route", { type: "geojson", data: geojson });
+    const glow = getComputedStyle(document.documentElement).getPropertyValue("--glow").trim() || "#3a8cff";
+    this.map.addLayer({ id: "route-casing", type: "line", source: "route",
+      layout: { "line-cap": "round", "line-join": "round" },
+      paint: { "line-color": "#000", "line-width": 9, "line-opacity": 0.45 } });
+    this.map.addLayer({ id: "route-line", type: "line", source: "route",
+      layout: { "line-cap": "round", "line-join": "round" },
+      paint: { "line-color": glow, "line-width": 6 } });
+  },
+  renderOnlineRoute(msg) {
+    this.routeOnline = true;
+    this.routeCoords = msg.coords;
+    this.routeEdges = null;
+    this.turnByTurn = (msg.steps || []).map((s) => ({
+      instruction: osrmInstruction(s), arrow: maneuverArrow(s),
+      name: s.name || "", distM: s.dist || 0, loc: s.loc,
+    })).filter((tt) => tt.instruction);
+    // pin each maneuver to its nearest point on the geometry (drives progress)
+    this.turnByTurn.forEach((tt) => {
+      tt.idx = 0; if (!tt.loc) return;
+      let bd = Infinity;
+      for (let i = 0; i < this.routeCoords.length; i++) {
+        const d = haversineM(tt.loc, this.routeCoords[i]);
+        if (d < bd) { bd = d; tt.idx = i; }
+      }
+    });
+    this.routeProgressIdx = 0; this._spokenIdx = -1;
+    this.routeTotal = { km: (msg.distance || 0) / 1000, min: (msg.duration || 0) / 60 };
+    this._drawRouteLine(msg.coords);
+    try {
+      const b = new maplibregl.LngLatBounds(msg.coords[0], msg.coords[0]);
+      msg.coords.forEach((c) => b.extend(c));
+      if (!this.lastFix) this.map.fitBounds(b, { padding: 50, duration: 500, maxZoom: 15 });
+    } catch (e) {}
+    this.renderTurnList();
+    this.updateGuidanceBanner();
+    $("#nav-clear-route-btn").classList.remove("hidden");
+  },
+  renderRoute(path) {   // offline tile-graph path
+    this.routeOnline = false;
     this.routeCoords = path.coords;
     this.routeEdges = path.edges;
-    this.turnByTurn = generateTurns(path);
-    this.routeProgressIdx = 0;
-    const geojson = { type: "Feature", geometry: { type: "LineString", coordinates: path.coords } };
-    if (this.map.getSource("route")) {
-      this.map.getSource("route").setData(geojson);
-    } else {
-      this.map.addSource("route", { type: "geojson", data: geojson });
-      this.map.addLayer({
-        id: "route-line", type: "line", source: "route",
-        paint: { "line-color": getComputedStyle(document.documentElement).getPropertyValue("--warn"), "line-width": 4 },
-      });
-    }
+    this.turnByTurn = generateTurns(path).map((s) => Object.assign({ arrow: "↑" }, s));
+    this.routeProgressIdx = 0; this._spokenIdx = -1;
+    this.routeTotal = null;
+    this._drawRouteLine(path.coords);
     this.renderTurnList();
     this.updateGuidanceBanner();
     $("#nav-clear-route-btn").classList.remove("hidden");
@@ -4030,23 +4119,56 @@ const Nav = {
     const box = $("#nav-route-list");
     box.innerHTML = "";
     box.classList.remove("hidden");
-    const totalKm = (this.routeEdges.reduce((a, e) => a + e.dist, 0) / 1000).toFixed(1);
-    const totalMin = Math.round(this.routeEdges.reduce((a, e) => a + e.time, 0) / 60);
-    box.appendChild(el("div", { class: "glow" }, [`ROUTE: ${totalKm} KM -- EST ${totalMin} MIN (LOADED-TILE ROADS ONLY)`]));
-    this.turnByTurn.forEach((s, i) => {
-      const suffix = s.name && s.name !== "UNNAMED ROAD" ? ` onto ${s.name}` : "";
-      box.appendChild(el("div", { class: "file-row" }, [`${i + 1}. ${s.instruction}${suffix} -- ${(s.distM / 1000).toFixed(2)} KM`]));
+    let hdr;
+    if (this.routeOnline && this.routeTotal) {
+      const mi = (this.routeTotal.km * 0.621371).toFixed(1);
+      const min = Math.round(this.routeTotal.min);
+      const eta = new Date(Date.now() + this.routeTotal.min * 60000);
+      hdr = `${mi} mi · ${min} min · ETA ${eta.getHours()}:${String(eta.getMinutes()).padStart(2, "0")}`;
+    } else if (this.routeEdges) {
+      const mi = (this.routeEdges.reduce((a, e) => a + e.dist, 0) / 1609.34).toFixed(1);
+      const min = Math.round(this.routeEdges.reduce((a, e) => a + e.time, 0) / 60);
+      hdr = `${mi} mi · ~${min} min (offline — loaded roads only)`;
+    } else hdr = "ROUTE";
+    box.appendChild(el("div", { class: "glow", style: "font-size:15px;" }, [hdr]));
+    this.turnByTurn.forEach((s) => {
+      const nm = (s.name && s.name !== "UNNAMED ROAD" && !s.instruction.includes(s.name)) ? " onto " + s.name : "";
+      box.appendChild(el("div", { class: "file-row" }, [`${s.arrow || "↑"}  ${s.instruction}${nm}  —  ${fmtDist(s.distM)}`]));
     });
   },
   showTurnBanner(text) {
-    $("#nav-turn-banner").classList.remove("hidden");
-    $("#nav-turn-banner").textContent = text;
+    const b = $("#nav-turn-banner");
+    b.classList.remove("hidden");
+    b.textContent = text;
   },
   updateGuidanceBanner() {
     if (!this.turnByTurn.length) return;
-    const next = this.turnByTurn[this.routeProgressIdx] || this.turnByTurn[this.turnByTurn.length - 1];
-    const suffix = next.name && next.name !== "UNNAMED ROAD" ? ` onto ${next.name}` : "";
-    this.showTurnBanner(`NEXT: ${next.instruction}${suffix} -- ${(next.distM / 1000).toFixed(2)} KM`);
+    const cur = this.turnByTurn[this.routeProgressIdx] || this.turnByTurn[this.turnByTurn.length - 1];
+    let m = cur.distM || 0;
+    if (cur.loc && this.lastFix) m = haversineM([this.lastFix.lon, this.lastFix.lat], cur.loc);
+    const b = $("#nav-turn-banner");
+    b.classList.remove("hidden");
+    b.innerHTML = '<span style="font-size:1.8em;line-height:1;vertical-align:-5px;"></span> <b style="font-size:1.15em;"></b> <span></span>';
+    b.children[0].textContent = cur.arrow || "↑";
+    b.children[1].textContent = fmtDist(m);
+    b.children[2].textContent = cur.instruction;
+    // Voice: announce each maneuver once, as it becomes the current one.
+    if (this._spokenIdx !== this.routeProgressIdx) {
+      this._spokenIdx = this.routeProgressIdx;
+      this.speak((m ? "In " + fmtDist(m) + ", " : "") + cur.instruction);
+    }
+  },
+  speak(text) {
+    if (Config.data.nav_voice === false || !text) return;
+    // On the device use the backend's offline TTS (espeak); in the browser
+    // demo use Web Speech. Only one, so turns aren't announced twice.
+    if (Net.connected) { try { Net.send({ type: "nav.speak", text: text }); } catch (e) {} return; }
+    try {
+      if (window.speechSynthesis) {
+        const u = new SpeechSynthesisUtterance(text);
+        u.rate = 1.0; window.speechSynthesis.cancel(); window.speechSynthesis.speak(u);
+      }
+    } catch (e) {}
   },
   updateProgress(lat, lon) {
     if (!this.routeCoords || !this.routeCoords.length) return;
@@ -4055,20 +4177,28 @@ const Nav = {
       const d = haversineM([lon, lat], this.routeCoords[i]);
       if (d < bestD) { bestD = d; bestIdx = i; }
     }
-    let idx = this.turnByTurn.findIndex(s => bestIdx >= s.startIdx && bestIdx < s.endIdx);
-    if (idx === -1) idx = this.turnByTurn.length - 1;
-    this.routeProgressIdx = idx;
+    if (this.routeOnline) {
+      let ti = this.turnByTurn.findIndex((tt) => (tt.idx || 0) > bestIdx);
+      if (ti === -1) ti = this.turnByTurn.length - 1;
+      this.routeProgressIdx = Math.max(0, ti);
+    } else {
+      let idx = this.turnByTurn.findIndex((s) => bestIdx >= s.startIdx && bestIdx < s.endIdx);
+      if (idx === -1) idx = this.turnByTurn.length - 1;
+      this.routeProgressIdx = idx;
+    }
     this.updateGuidanceBanner();
   },
   clearRoute() {
     this.destLngLat = null; this.routeCoords = null; this.routeEdges = null; this.turnByTurn = [];
-    this.startOverride = null;
+    this.startOverride = null; this.routeOnline = false; this.routeTotal = null;
+    clearTimeout(this._routeTimer);
     if (this.destMarker) { this.destMarker.remove(); this.destMarker = null; }
     if (this.startMarker) { this.startMarker.remove(); this.startMarker = null; }
-    if (this.map && this.map.getLayer && this.map.getLayer("route-line")) {
-      this.map.removeLayer("route-line");
-      this.map.removeSource("route");
+    if (this.map && this.map.getLayer) {
+      ["route-line", "route-casing"].forEach((id) => { if (this.map.getLayer(id)) this.map.removeLayer(id); });
+      if (this.map.getSource("route")) this.map.removeSource("route");
     }
+    try { if (window.speechSynthesis) window.speechSynthesis.cancel(); } catch (e) {}
     $("#nav-route-list").classList.add("hidden");
     $("#nav-turn-banner").classList.add("hidden");
     $("#nav-clear-route-btn").classList.add("hidden");

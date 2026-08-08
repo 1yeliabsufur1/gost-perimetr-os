@@ -2743,6 +2743,56 @@ async def geocode(query, near=None):
         return {"ok": False, "results": [], "detail": "geocode failed: " + str(e)[:180]}
 
 
+async def nav_route(start, dest):
+    """Real road route via OSRM (online) -- the CarPlay-class turn-by-turn.
+    start/dest = [lon,lat]. Returns full geometry + maneuver steps + ETA, or
+    ok:False so the frontend falls back to its offline tile-graph router."""
+    try:
+        if not (start and dest and len(start) == 2 and len(dest) == 2):
+            return {"ok": False, "detail": "need start and destination"}
+
+        def _q():
+            url = ("https://router.project-osrm.org/route/v1/driving/"
+                   "%f,%f;%f,%f?overview=full&geometries=geojson&steps=true" %
+                   (float(start[0]), float(start[1]), float(dest[0]), float(dest[1])))
+            req = urllib.request.Request(url, headers={"User-Agent": "gost-perimetr-os/1.0"})
+            with urllib.request.urlopen(req, timeout=15) as r:
+                return json.load(r)
+
+        data = await asyncio.get_event_loop().run_in_executor(None, _q)
+        if data.get("code") != "Ok" or not data.get("routes"):
+            return {"ok": False, "detail": data.get("code", "no route")}
+        route = data["routes"][0]
+        steps = []
+        for leg in route.get("legs", []):
+            for st in leg.get("steps", []):
+                m = st.get("maneuver", {})
+                steps.append({
+                    "type": m.get("type", ""), "modifier": m.get("modifier", ""),
+                    "name": st.get("name", ""), "dist": st.get("distance", 0),
+                    "dur": st.get("duration", 0), "loc": m.get("location"),
+                    "exit": m.get("exit"),
+                })
+        return {"ok": True, "coords": route["geometry"]["coordinates"], "steps": steps,
+                "duration": route.get("duration", 0), "distance": route.get("distance", 0)}
+    except Exception as e:
+        return {"ok": False, "detail": "route failed: " + str(e)[:150]}
+
+
+async def nav_speak(text):
+    """Speak a turn-by-turn instruction offline via espeak-ng (best-effort,
+    fire-and-forget so it never blocks the poll loop)."""
+    try:
+        if not text or not shutil.which("espeak-ng"):
+            return {"ok": False}
+        await asyncio.create_subprocess_exec(
+            "espeak-ng", "-s", "155", str(text)[:180],
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+        return {"ok": True}
+    except Exception:
+        return {"ok": False}
+
+
 def system_info():
     # Single source of truth: the VERSION file, same value the update check
     # compares against GitHub (bailey: ABOUT said 3.0.0 but updates said 1.1.0).
@@ -3390,6 +3440,10 @@ async def route_message(state: GostState, ws, msg):
         await ws.send(json.dumps({"type": "ssh.set", **await ssh_set(bool(msg.get("on")))}))
     elif t == "geocode":
         await ws.send(json.dumps({"type": "geocode", **await geocode(msg.get("q"), msg.get("near"))}))
+    elif t == "nav.route":
+        await ws.send(json.dumps({"type": "nav.route", **await nav_route(msg.get("start"), msg.get("dest"))}))
+    elif t == "nav.speak":
+        await nav_speak(msg.get("text"))
     elif t == "game.native":
         await ws.send(json.dumps({"type": "game.native", **await launch_native_game(state, msg.get("path"))}))
     elif t == "game.stop":
