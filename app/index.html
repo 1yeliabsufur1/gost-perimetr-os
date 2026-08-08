@@ -13,6 +13,15 @@
 :root, [data-theme="gost"]     { --pri:#ffb000; --dim:#7a5200; --bg:#0d0904; --warn:#ff3b30; --glow:#ffb000; --line:#8a5a00;
                                  --font:"Courier New", ui-monospace, "Cascadia Mono", monospace; --scan:1; --radius:0px; --letter:0.5px; --fsize:15px;
                                  --thumb-filter:sepia(0.5) hue-rotate(345deg) saturate(1.4) brightness(0.95); }
+/* GOST AMBER: deep phosphor CRT -- warm vignette + top bloom, text glow, panel inner-glow */
+[data-theme="gost"] body::after {
+  content:""; position:fixed; inset:0; z-index:-1; pointer-events:none;
+  background:
+    radial-gradient(ellipse at 50% 44%, transparent 54%, rgba(0,0,0,0.5) 100%),
+    radial-gradient(ellipse at 50% 6%, rgba(255,176,0,0.07), transparent 42%);
+}
+[data-theme="gost"] .glow { text-shadow:0 0 4px var(--glow), 0 0 12px var(--glow), 0 0 28px rgba(255,176,0,0.32); }
+[data-theme="gost"] .frame { box-shadow:inset 0 0 26px rgba(255,176,0,0.045); }
 /* SAKURA DREAM -- 90s/2000s pastel + vaporwave anime: twilight plum, pastel-neon
    pink, rounded Baloo font, soft VHS bloom (not hard CRT scanlines), round panels */
 [data-theme="anime"]           { --pri:#ff93d1; --dim:#a684c4; --bg:#1e1236; --warn:#ffd166; --glow:#ff7ac6; --line:#8158b0;
@@ -27,6 +36,21 @@
 /* slow gradient breathing (26s, subtle -- lofi-loop vibe, easy on the Pi) */
 [data-theme="anime"] body { background-size:300% 300%; animation:sakuraDrift 26s ease-in-out infinite; }
 @keyframes sakuraDrift { 0%{background-position:0% 35%} 50%{background-position:100% 65%} 100%{background-position:0% 35%} }
+/* sliced synthwave sun glowing above the grid horizon */
+[data-theme="anime"] body::before {
+  content:""; position:fixed; left:50%; bottom:14%; transform:translateX(-50%); z-index:-1; pointer-events:none;
+  width:min(70vh, 92vw); height:min(70vh, 92vw); border-radius:50%;
+  background:linear-gradient(180deg,#ffe36a 0%,#ff9ad5 46%,#c46cff 100%);
+  -webkit-mask-image:linear-gradient(180deg,#000 0 46%, transparent 46%), repeating-linear-gradient(180deg,#000 0 12px, #000 12px, transparent 12px 19px);
+  -webkit-mask-composite:source-over;
+  mask-image:linear-gradient(180deg,#000 0 46%, transparent 46%), repeating-linear-gradient(180deg,#000 0 12px, #000 12px, transparent 12px 19px);
+  box-shadow:0 0 80px 26px rgba(255,138,214,0.30); opacity:0.9;
+}
+[data-theme="anime"] .glow { text-shadow:0 0 6px var(--glow), 0 0 20px rgba(255,122,198,0.55); }
+/* frosted-glass panels so the big sun glows behind but text stays crisp */
+[data-theme="anime"] .frame { background:rgba(26,15,50,0.60); -webkit-backdrop-filter:blur(3px); backdrop-filter:blur(3px); }
+[data-theme="anime"] .frame::before { background:rgba(26,15,50,0.9); }
+[data-theme="anime"] .tv-chan-row { background:rgba(26,15,50,0.5); }
 /* vaporwave perspective grid fading up from the bottom edge (behind the UI) */
 [data-theme="anime"] body::after {
   content:""; position:fixed; left:-10%; right:-10%; bottom:0; height:42%; z-index:-1; pointer-events:none;
@@ -112,13 +136,35 @@
   --bg-grad:linear-gradient(135deg,#0b0e12 0%,#0e0a14 100%);
   --thumb-filter:contrast(1.16) saturate(1.35) brightness(1.03);
 }
-/* chromatic-aberration glitch on headers/accents (red/cyan channel split) */
+/* HUD panels: cyan box, yellow top rail + corner slash, neon bloom */
+[data-theme="cyberpunk"] .frame {
+  border:1px solid rgba(0,229,255,0.5); border-top:2px solid var(--warn); border-left:3px solid var(--glow);
+  background:linear-gradient(180deg, rgba(0,229,255,0.06) 0, transparent 44%);
+  box-shadow:0 0 18px rgba(0,229,255,0.18), inset 0 0 26px rgba(0,229,255,0.04);
+}
+[data-theme="cyberpunk"] .frame::after {   /* angled yellow corner slash (2077 UI) */
+  content:""; position:absolute; top:0; right:0; width:20px; height:20px; pointer-events:none;
+  background:linear-gradient(45deg, transparent 52%, var(--warn) 52%);
+}
+[data-theme="cyberpunk"] .frame::before { color:var(--glow); text-shadow:0 0 9px var(--glow); }
+/* neon bloom + periodic chromatic-aberration glitch on the big display text */
 [data-theme="cyberpunk"] .yt-brand,
 [data-theme="cyberpunk"] #clock,
-[data-theme="cyberpunk"] .glow,
-[data-theme="cyberpunk"] .frame::before { text-shadow:1.5px 0 var(--warn), -1.5px 0 var(--glow); }
-/* sharp cyan accent bar down the left of tech panels */
-[data-theme="cyberpunk"] .frame { border-left:3px solid var(--glow); }
+[data-theme="cyberpunk"] .glow {
+  color:var(--pri); text-shadow:0 0 6px var(--pri), 0 0 18px rgba(245,228,0,0.55);
+  animation:cpGlitch 6s steps(1) infinite;
+}
+@keyframes cpGlitch {
+  0%,91%,100% { text-shadow:0 0 6px var(--pri), 0 0 18px rgba(245,228,0,0.55); }
+  92% { text-shadow:2px 0 var(--warn), -2px 0 var(--glow), 0 0 6px var(--pri); }
+  94% { text-shadow:-2px 0 var(--warn), 2px 0 var(--glow); }
+  96% { text-shadow:2px 0 var(--warn), -2px 0 var(--glow); }
+}
+[data-theme="cyberpunk"] button { border-color:var(--glow); box-shadow:inset 0 0 10px rgba(0,229,255,0.08); }
+[data-theme="cyberpunk"] button:hover { box-shadow:0 0 12px rgba(0,229,255,0.4); }
+[data-theme="cyberpunk"] .selected { box-shadow:0 0 16px var(--pri); }
+[data-theme="cyberpunk"] .tv-chan-row { border-color:rgba(0,229,255,0.4); }
+[data-theme="cyberpunk"] .tv-chan-row:hover, [data-theme="cyberpunk"] .tv-chan-row:focus { border-color:var(--warn); box-shadow:0 0 12px rgba(255,43,94,0.4); }
 /* ---------- MINECRAFT (dirt + grass, blocky pixel font, pixelated thumbnails) ---------- */
 @font-face { font-family:"Silkscreen"; src:url("vendor/silkscreen.woff2") format("woff2"); font-weight:400 700; font-display:swap; }
 [data-theme="minecraft"] {
@@ -128,10 +174,35 @@
   --bg-grad:linear-gradient(180deg,#4a3623 0%,#312218 100%);
   --thumb-filter:saturate(1.1) contrast(1.05);
 }
-/* grass-block accent: thick green top border on dirt-brown panels + green titles */
-[data-theme="minecraft"] .frame { border-width:2px; border-top:4px solid #6cbb3c; }
-[data-theme="minecraft"] .frame::before { color:#6cbb3c; font-size:13px; }
-/* blocky pixelated thumbnails -- pure Minecraft */
+/* dirt-block world texture (block grid + pixel dabs) behind everything */
+[data-theme="minecraft"] body {
+  background-color:#6b4a2d;
+  background-image:
+    repeating-linear-gradient(0deg, rgba(0,0,0,0.16) 0 2px, transparent 2px 34px),
+    repeating-linear-gradient(90deg, rgba(0,0,0,0.16) 0 2px, transparent 2px 34px),
+    radial-gradient(rgba(0,0,0,0.16) 1.5px, transparent 1.5px),
+    radial-gradient(rgba(255,255,255,0.05) 1.5px, transparent 1.5px);
+  background-size:34px 34px, 34px 34px, 17px 17px, 23px 23px;
+  background-position:0 0, 0 0, 5px 3px, 13px 9px;
+}
+/* grass-topped dirt-block panels */
+[data-theme="minecraft"] .frame {
+  border:2px solid #241608; border-top:5px solid #5b8f2e; background:#7a5334;
+  box-shadow:inset 0 0 0 2px rgba(58,42,26,0.9), 0 3px 0 rgba(0,0,0,0.4);
+}
+[data-theme="minecraft"] .frame::before { color:#fff; text-shadow:2px 2px 0 #2a2a2a; font-size:13px; background:#5b8f2e; padding:1px 6px; }
+/* classic beveled stone GUI buttons */
+[data-theme="minecraft"] button {
+  background:#8b8b8b; color:#fff; border:3px solid;
+  border-color:#c6c6c6 #373737 #373737 #c6c6c6; text-shadow:2px 2px 0 #3f3f3f;
+  padding:8px 12px; image-rendering:pixelated; border-radius:0;
+}
+[data-theme="minecraft"] button:hover, [data-theme="minecraft"] button:focus {
+  background:#9b9b7a; border-color:#fdfdaf #6f6f4f #6f6f4f #fdfdaf; outline:2px solid #fff;
+}
+[data-theme="minecraft"] .selected, [data-theme="minecraft"] .selected:focus { background:#5b8f2e !important; border-color:#8fd05a #2f5010 #2f5010 #8fd05a !important; }
+[data-theme="minecraft"] .glow { text-shadow:2px 2px 0 #2a2a2a; }
+[data-theme="minecraft"] .tv-chan-row { background:#7a5334; border:2px solid #241608; }
 [data-theme="minecraft"] .yt-thumb { image-rendering:pixelated; }
 /* GB DMG has dark-green text, but the duration chip is dark -> use light green so it's legible */
 [data-theme="gameboy"]:not([data-gbc]) .yt-dur { color:#9bbc0f; }
