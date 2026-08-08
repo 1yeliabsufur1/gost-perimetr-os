@@ -263,6 +263,73 @@
 @keyframes buzz {
   0%,100%{filter:brightness(1)} 46%{filter:brightness(1.012)} 50%{filter:brightness(0.982)}
   54%{filter:brightness(1.008)} 83%{filter:brightness(1)} 85%{filter:brightness(0.99)} 87%{filter:brightness(1)} }
+/* ---------- VRCHAT (late-night neon world: void sky, holo panels, drifting motes) ---------- */
+[data-theme="vrchat"] {
+  --pri:#dff6ff; --dim:#8ea8d8; --bg:#070b1c; --warn:#ff4fa3; --glow:#37e6ff; --line:#3d6bd6;
+  --font:"Rajdhani","Segoe UI",system-ui,sans-serif; --display:"Rajdhani",sans-serif;
+  --scan:0.10; --radius:14px; --letter:0.4px; --fsize:17px;
+  --bg-grad:radial-gradient(ellipse at 50% 118%, #2a1170 0%, #10133e 42%, #070b1c 78%);
+  --panel-glow:0 0 26px rgba(55,230,255,0.20), inset 0 0 30px rgba(120,80,255,0.10);
+  --btn-glow:0 0 14px rgba(55,230,255,0.25);
+  --thumb-filter:saturate(1.25) contrast(1.06) brightness(1.04);
+}
+/* world floor: a neon horizon grid receding into the void, plus a soft skyglow */
+[data-theme="vrchat"] body::after {
+  content:""; position:fixed; left:-25%; right:-25%; bottom:0; height:48%; z-index:-1; pointer-events:none;
+  background-image:
+    repeating-linear-gradient(90deg, rgba(55,230,255,0.30) 0 2px, transparent 2px 62px),
+    repeating-linear-gradient(0deg,  rgba(255,79,163,0.22) 0 2px, transparent 2px 62px);
+  transform:perspective(300px) rotateX(72deg); transform-origin:bottom center;
+  -webkit-mask-image:linear-gradient(to top,#000 0%,transparent 88%); mask-image:linear-gradient(to top,#000 0%,transparent 88%);
+  opacity:0.55; animation:vrcFloor 18s linear infinite;
+}
+@keyframes vrcFloor { from { background-position:0 0, 0 0; } to { background-position:0 0, 0 62px; } }
+/* drifting light motes -- the "someone's avatar particles" ambience */
+[data-theme="vrchat"] body::before {
+  content:""; position:fixed; inset:0; z-index:-1; pointer-events:none; opacity:0.5;
+  background-image:
+    radial-gradient(2px 2px at 12% 30%, rgba(55,230,255,0.9), transparent 60%),
+    radial-gradient(2px 2px at 78% 18%, rgba(255,79,163,0.85), transparent 60%),
+    radial-gradient(1.6px 1.6px at 42% 62%, rgba(190,150,255,0.85), transparent 60%),
+    radial-gradient(1.6px 1.6px at 88% 72%, rgba(55,230,255,0.7), transparent 60%),
+    radial-gradient(1.4px 1.4px at 26% 84%, rgba(255,255,255,0.7), transparent 60%);
+  animation:vrcMotes 22s ease-in-out infinite alternate;
+}
+@keyframes vrcMotes { from { transform:translateY(0) } to { transform:translateY(-26px) } }
+/* holographic glass panels with a cyan->magenta rim */
+[data-theme="vrchat"] .frame {
+  background:linear-gradient(160deg, rgba(24,32,78,0.72), rgba(12,16,44,0.62));
+  border:1px solid rgba(55,230,255,0.45);
+  -webkit-backdrop-filter:blur(5px); backdrop-filter:blur(5px);
+  box-shadow:0 0 26px rgba(55,230,255,0.18), inset 0 1px 0 rgba(255,255,255,0.10);
+}
+[data-theme="vrchat"] .frame::before {
+  content:attr(data-title); top:-13px; padding:3px 14px 4px; letter-spacing:2px; border-radius:999px;
+  background:linear-gradient(90deg, rgba(55,230,255,0.9), rgba(255,79,163,0.9));
+  color:#06122a; font-weight:700; border:none; box-shadow:0 0 16px rgba(55,230,255,0.6);
+}
+/* nameplate-style pill buttons that light up like a world portal */
+[data-theme="vrchat"] button {
+  background:rgba(18,26,66,0.75); border:1px solid rgba(55,230,255,0.5); border-radius:999px;
+  padding:8px 16px; color:var(--pri); text-shadow:0 0 8px rgba(55,230,255,0.55);
+}
+[data-theme="vrchat"] button:hover, [data-theme="vrchat"] button:focus {
+  background:rgba(40,64,140,0.85); border-color:var(--warn);
+  box-shadow:0 0 20px rgba(255,79,163,0.55), inset 0 0 18px rgba(55,230,255,0.20);
+}
+[data-theme="vrchat"] .selected, [data-theme="vrchat"] .selected:focus {
+  background:linear-gradient(90deg, var(--glow), var(--warn)) !important; color:#06122a !important;
+  box-shadow:0 0 22px rgba(55,230,255,0.7) !important;
+}
+[data-theme="vrchat"] .glow {
+  color:#fff; text-shadow:0 0 8px var(--glow), 0 0 22px rgba(55,230,255,0.6), 0 0 40px rgba(255,79,163,0.35);
+}
+[data-theme="vrchat"] .tv-chan-row {
+  background:rgba(18,26,66,0.55); border:1px solid rgba(55,230,255,0.28); border-radius:10px;
+}
+[data-theme="vrchat"] .tv-chan-row:hover, [data-theme="vrchat"] .tv-chan-row:focus {
+  border-color:var(--warn); box-shadow:0 0 16px rgba(255,79,163,0.45);
+}
 /* red SOUL heart as the focus cursor -- straight out of the UT menu */
 [data-theme="undertale"] [data-focus]:focus { outline:none; box-shadow:none; position:relative; }
 [data-theme="undertale"] [data-focus]:focus::after {
@@ -453,6 +520,16 @@ a { color: var(--pri); }
 #tv-video { width:100%; height:100%; object-fit:contain; background:#000; }
 #tv-static-canvas { width:100%; height:100%; }
 #tv-overlay-text { position:absolute; bottom:8px; left:8px; font-size:12px; background:rgba(0,0,0,0.6); padding:2px 8px; }
+/* TV comfort controls -- bottom-left of the screen, fade in on hover/focus so
+   they never sit over the picture while you're just watching. */
+#tv-controls { position:absolute; left:12px; bottom:12px; display:flex; gap:8px; align-items:center;
+  padding:6px 10px; background:rgba(0,0,0,0.55); border:1px solid var(--line); border-radius:var(--radius);
+  opacity:0.22; transition:opacity 0.25s; z-index:5; }
+#tv-controls:hover, #tv-controls:focus-within, #tv-screen:hover #tv-controls { opacity:1; }
+#tv-controls button { padding:4px 10px; font-size:13px; min-height:34px; }
+#tv-vol { width:120px; }
+[data-touch] #tv-controls { opacity:1; }           /* always visible for touch */
+[data-touch] #tv-controls button { min-height:44px; }
 #tv-osd { position:absolute; top:20px; right:32px; text-align:right; opacity:0; transition:opacity 0.3s; pointer-events:none; }
 #tv-osd.show { opacity:1; }
 #tv-osd .osd-num { font-size:64px; font-weight:bold; }
@@ -546,6 +623,11 @@ a { color: var(--pri); }
              radial-gradient(circle at 68% 78%, rgba(0,0,0,0.22) 1.5px, transparent 2px),
              radial-gradient(circle at 82% 52%, rgba(255,255,255,0.16) 1.5px, transparent 2px),
              radial-gradient(circle at 45% 85%, rgba(0,0,0,0.2) 1.5px, transparent 2px); }
+.theme-swatch[data-theme="vrchat"] { background:radial-gradient(circle at 50% 105%, #2a1170 0%, #10133e 55%, #070b1c 100%); }
+.theme-swatch[data-theme="vrchat"]::after { content:""; position:absolute; inset:0;
+  background-image:repeating-linear-gradient(90deg, rgba(55,230,255,0.65) 0 1px, transparent 1px 7px),
+                   repeating-linear-gradient(0deg, rgba(255,79,163,0.45) 0 1px, transparent 1px 7px);
+  -webkit-mask-image:linear-gradient(to top,#000 0,transparent 72%); mask-image:linear-gradient(to top,#000 0,transparent 72%); }
 .theme-swatch[data-theme="backrooms"] { background:#b3a54a; }
 .theme-swatch[data-theme="backrooms"]::after { content:""; position:absolute; inset:0;
   background:repeating-linear-gradient(0deg, rgba(0,0,0,0.14) 0 1px, transparent 1px 8px),
@@ -755,6 +837,12 @@ html[data-pointer="touch"], html[data-pointer="touch"] *,
             <div id="tv-nownext" class="hidden"></div>
             <!-- top-right GUIDE toggle -> cross-channel "what's on now" grid -->
             <button data-focus id="tv-guide-btn">[ GUIDE ]</button>
+            <!-- viewing comfort: volume, mute (autoplay can force-mute), zoom/fit -->
+            <div id="tv-controls">
+              <button data-focus id="tv-mute-btn" title="mute/unmute">🔊</button>
+              <input type="range" id="tv-vol" data-focus min="0" max="100" value="100" title="volume">
+              <button data-focus id="tv-fit-btn" title="fit / fill the screen">FIT</button>
+            </div>
             <div id="tv-osd" class="glow"><div class="osd-num"></div><div class="osd-name"></div></div>
             <div id="tv-guide-grid" class="hidden"></div>
           </div>
@@ -1008,6 +1096,7 @@ const THEMES = [
   {id:"cyberpunk", name:"CYBERPUNK 2077"},
   {id:"minecraft", name:"MINECRAFT"},
   {id:"backrooms", name:"THE BACKROOMS"},
+  {id:"vrchat", name:"VRCHAT"},
 ];
 const WEEKDAYS = ["sun","mon","tue","wed","thu","fri","sat"];
 
@@ -1025,7 +1114,7 @@ const LS = {
 /* ------------------------------- config ---------------------------------- */
 const Config = {
   data: Object.assign({
-    setup_done: false, source_mode: "AUTO", theme: "gost", guide3: {}, dashcam: false, channel_names: {}, brightness: 100, gbc: false, dr: false, touch: false, crt: false, nav_voice: true,
+    setup_done: false, source_mode: "AUTO", theme: "gost", guide3: {}, dashcam: false, channel_names: {}, brightness: 100, gbc: false, dr: false, touch: false, crt: false, nav_voice: true, tv_volume: 100, tv_fill: false,
   }, LS.get("config", {})),
   save() { LS.set("config", this.data); },
   set(key, value, fromRemote) {
@@ -2719,9 +2808,11 @@ const TV = {
           } catch (e) {}
           video.play().catch(() => {
             // Autoplay-with-sound blocked (browser policy): retry muted so
-            // the broadcast at least runs; on-device mpv handles audio.
+            // the broadcast at least runs. The TV controls' 🔇 button then
+            // restores sound with one tap (bailey: video comfort).
             video.muted = true;
             video.play().catch(() => {});
+            const mb = $("#tv-mute-btn"); if (mb) mb.textContent = "🔇";
           });
         };
         if (video.dataset.src !== res.file.url) {
@@ -4467,6 +4558,31 @@ function buildSettings() {
   updateUnitButtons();
   $("#wifi-scan-btn").addEventListener("click", () => Wifi.open());
   $("#tv-guide-btn").addEventListener("click", () => TvGuide.toggle());
+  /* ---- TV viewing comfort: volume, mute, fit/fill (all persisted) ---- */
+  (function () {
+    const vid = $("#tv-video"), volEl = $("#tv-vol"), muteBtn = $("#tv-mute-btn"), fitBtn = $("#tv-fit-btn");
+    if (!vid || !volEl) return;
+    const vol = Config.data.tv_volume != null ? Config.data.tv_volume : 100;
+    volEl.value = String(vol);
+    const paintMute = () => { muteBtn.textContent = (vid.muted || vid.volume === 0) ? "🔇" : "🔊"; };
+    const applyVol = (v) => { vid.volume = Math.max(0, Math.min(1, v / 100)); if (v > 0) vid.muted = false; paintMute(); };
+    applyVol(Number(vol));
+    volEl.addEventListener("input", () => { applyVol(Number(volEl.value)); Config.set("tv_volume", Number(volEl.value)); });
+    muteBtn.addEventListener("click", () => {
+      vid.muted = !vid.muted;
+      // unmuting after an autoplay force-mute needs a play() nudge to get sound
+      if (!vid.muted) { if (Number(volEl.value) === 0) { volEl.value = "60"; applyVol(60); Config.set("tv_volume", 60); } vid.play().catch(() => {}); }
+      paintMute();
+    });
+    // keep the icon honest when autoplay policy force-mutes the video
+    vid.addEventListener("volumechange", paintMute);
+    const applyFit = (fill) => {
+      vid.style.objectFit = fill ? "cover" : "contain";
+      fitBtn.textContent = fill ? "FILL" : "FIT";
+    };
+    applyFit(!!Config.data.tv_fill);
+    fitBtn.addEventListener("click", () => { const f = !Config.data.tv_fill; Config.set("tv_fill", f); applyFit(f); });
+  })();
   // (CH83 default search term is auto-remembered from the last search; no
   // separate Settings control needed -- the search bar lives in CH83 itself.)
   // The diagnostic runs from Settings AND from the DRIVE tab (bailey: DRIVE
