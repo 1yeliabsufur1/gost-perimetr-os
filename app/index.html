@@ -644,6 +644,13 @@ a { color: var(--pri); }
 #yt-bar { padding:8px 12px; border-bottom:1px solid var(--line); display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
 #yt-bar .yt-brand { font-size:13px; letter-spacing:1px; }
 #yt-search-input { flex:1; min-width:140px; }
+/* one-tap category / recent-search chips (no typing while driving) */
+#yt-chips { display:flex; flex-wrap:wrap; gap:6px; padding:6px 10px 0; }
+.yt-chip { padding:5px 12px; font-size:12px; border:1px solid var(--line); background:transparent;
+  color:var(--pri); border-radius:999px; cursor:pointer; white-space:nowrap; }
+.yt-chip:hover, .yt-chip:focus { background:var(--dim); outline:2px solid var(--pri); }
+.yt-chip.recent { border-style:dashed; color:var(--dim); }
+[data-touch] .yt-chip { padding:10px 16px; font-size:14px; }
 #yt-msg { padding:6px 12px; font-size:12px; }
 /* Two things make this scroll with un-squished cards:
  *  - min-height:0 lets this flex child shrink so overflow-y:auto can scroll;
@@ -1050,9 +1057,12 @@ html[data-pointer="touch"], html[data-pointer="touch"] *,
       <input type="text" id="yt-search-input" data-focus placeholder="search youtube...">
       <button data-focus id="yt-search-btn">[ SEARCH ]</button>
       <button data-focus id="yt-random-btn">[ &#8646; RANDOM ]</button>
+      <button data-focus id="yt-saved-btn">[ &#9733; SAVED ]</button>
       <button data-focus id="yt-full-btn">[ OPEN FULL YOUTUBE ]</button>
       <button data-focus id="yt-close-btn">[ BACK TO TV ]</button>
     </div>
+    <!-- one-tap categories + your recent searches: no typing while driving -->
+    <div id="yt-chips"></div>
     <div id="yt-msg" class="dim"></div>
     <div id="yt-results"></div>
   </div>
@@ -1061,6 +1071,7 @@ html[data-pointer="touch"], html[data-pointer="touch"] *,
     <div id="yt-player-bar">
       <span id="yt-player-title"></span>
       <button id="yt-shuffle-fab" data-focus title="play random videos back-to-back">&#8646; RANDOM</button>
+      <button data-focus id="yt-save-btn" title="save this video">&#9734; SAVE</button>
       <button data-focus id="yt-player-close-btn">[ BACK TO RESULTS ]</button>
     </div>
     <iframe id="yt-player-frame" allow="autoplay; encrypted-media; fullscreen" allowfullscreen></iframe>
@@ -1262,6 +1273,10 @@ function resolveChannel(chan, channels, commercials, guide3, nowMs) {
     for (const b of schedule) {
       if (b.s <= minuteOfDay && minuteOfDay < b.s + b.d) {
         const offset = (minuteOfDay - b.s) * 60 + secOfMinute;
+        // A saved YouTube video programmed into the guide ("yt:<id>").
+        if (typeof b.f === "string" && b.f.indexOf("yt:") === 0) {
+          return { kind: "yt", id: b.f.slice(3), offset, remaining: b.d * 60 - offset };
+        }
         const file = ch && ch.files.find(f => f.name === b.f);
         if (file) return { kind: "show", file, offset, remaining: b.d * 60 - offset };
         return { kind: "static", reason: "missing_file" };
@@ -2776,7 +2791,7 @@ const TV = {
     // Minute-accurate handoff: re-resolve exactly when this show/commercial/
     // gap ends, so the next block starts on its scheduled minute instead of
     // up to 30s late on the coarse poll (which stays as a safety net).
-    const boundarySecs = res.kind === "show" ? res.remaining
+    const boundarySecs = (res.kind === "show" || res.kind === "yt") ? res.remaining
       : res.kind === "commercial" ? res.length
       : res.until;
     if (boundarySecs != null && boundarySecs > 0 && boundarySecs < 24 * 3600) {
@@ -2787,6 +2802,26 @@ const TV = {
     }
     $("#tv-idle").classList.add("hidden");
     const video = $("#tv-video"), canvas = $("#tv-static-canvas");
+    // A saved YouTube video scheduled on this channel: hand off to the CH83
+    // embed, seeked to the broadcast offset so it's "already airing".
+    if (res.kind === "yt") {
+      stopStaticAnim();
+      canvas.classList.add("hidden");
+      video.classList.add("hidden"); video.pause();
+      const start = Math.max(0, Math.floor(res.offset || 0));
+      const src = "https://www.youtube-nocookie.com/embed/" + res.id +
+        "?autoplay=1&rel=0&enablejsapi=1&start=" + start;
+      const frame = $("#yt-player-frame");
+      if (frame.dataset.tuned !== res.id + ":" + this.chan) {
+        frame.dataset.tuned = res.id + ":" + this.chan;
+        frame.src = src;
+      }
+      const saved = (LS.get("yt_saved", []) || []).find((x) => x.id === res.id);
+      $("#yt-player-title").textContent = "CH" + this.chan + " · " + ((saved && saved.title) || "YOUTUBE");
+      $("#yt-player").classList.remove("hidden");
+      $("#tv-overlay-text").textContent = "CH" + this.chan + " -- " + ((this.channels()[this.chan] || {}).name || "");
+      return;
+    }
     if (res.kind === "show" || res.kind === "commercial") {
       stopStaticAnim();
       canvas.classList.add("hidden");
@@ -2898,6 +2933,10 @@ setInterval(() => {
 function _cleanTitle(name) { return String(name || "").replace(/\.[^.]+$/, ""); }
 function programAt(chan, atMs) {
   const res = resolveChannel(chan, TV.channels(), TV.commercials, Config.data.guide3 || {}, atMs);
+  if (res.kind === "yt") {
+    const s = (LS.get("yt_saved", []) || []).find((x) => x.id === res.id);
+    return { label: "▶ " + ((s && s.title) || "YouTube video"), live: true };
+  }
   if (res.kind === "show") return { label: _cleanTitle(typeof res.file === "string" ? res.file : res.file.name), live: true };
   if (res.kind === "commercial") return { label: "▪ commercial", live: false };
   if (res.reason === "off_air") return null;   // truly empty channel
@@ -3032,8 +3071,127 @@ const YT = {
     $("#tv-static-canvas").classList.add("hidden"); stopStaticAnim();
     $("#tv-overlay-text").textContent = "CH83 -- YOUTUBE";
     $("#yt-browser").classList.remove("hidden");
+    this.renderChips();
     if (!this.loaded) { this.loaded = true; this.search(Config.data.yt_query || "F-150 PowerBoost"); }
     setTimeout(() => $("#yt-search-input").focus(), 0);
+  },
+  /* ---- one-tap categories + your recent searches ---- */
+  CATEGORIES: ["Music", "Podcasts", "News", "Comedy", "Car Reviews", "Truck Builds",
+               "Off-Road", "Live Radio", "Documentaries", "How-To"],
+  renderChips() {
+    const box = $("#yt-chips");
+    if (!box) return;
+    box.innerHTML = "";
+    this.CATEGORIES.forEach((c) => {
+      const b = el("button", { class: "yt-chip", "data-focus": "" }, [c]);
+      b.addEventListener("click", () => this.search(c));
+      box.appendChild(b);
+    });
+    (LS.get("yt_recent", []) || []).slice(0, 6).forEach((q) => {
+      const b = el("button", { class: "yt-chip recent", "data-focus": "", title: "recent search" }, ["↺ " + q]);
+      b.addEventListener("click", () => this.search(q));
+      box.appendChild(b);
+    });
+  },
+  rememberSearch(q) {
+    const list = (LS.get("yt_recent", []) || []).filter((x) => x.toLowerCase() !== q.toLowerCase());
+    list.unshift(q);
+    LS.set("yt_recent", list.slice(0, 10));
+    this.renderChips();
+  },
+  /* ---- saved videos: pick a CHANNEL and it's programmed into the guide ----
+   * A saved video isn't a flat favourite -- it's scheduled onto one of your
+   * channels like real broadcast content, auto-fitted into the first free
+   * time slot (bailey). If that channel's day is full, we say so. */
+  savedList() { return LS.get("yt_saved", []) || []; },
+  isSaved(id) { return this.savedList().some((v) => v.id === id); },
+  toggleSave() {
+    const v = this.current;
+    if (!v || !v.id) return;
+    if (this.isSaved(v.id)) {                       // already saved -> unsave everywhere
+      LS.set("yt_saved", this.savedList().filter((x) => x.id !== v.id));
+      this.unscheduleVideo(v.id);
+      this.paintSaveBtn();
+      return;
+    }
+    this.openSaveModal(v);
+  },
+  /** Video length in minutes (parse "12:34" / "1:02:03"), default 30. */
+  videoMinutes(v) {
+    const p = String(v.duration || "").split(":").map(Number);
+    if (!p.length || p.some(isNaN)) return 30;
+    const sec = p.length === 3 ? p[0] * 3600 + p[1] * 60 + p[2] : p.length === 2 ? p[0] * 60 + p[1] : p[0];
+    return Math.max(5, Math.ceil(sec / 60 / 5) * 5);          // round up to a 5-min slot
+  },
+  /** First gap of `mins` in a day's blocks, or null when the day is full. */
+  findFreeSlot(blocks, mins) { return findNextFreeStart(blocks, mins, 0); },
+  openSaveModal(v) {
+    const mins = this.videoMinutes(v);
+    Modal.open("SAVE TO A CHANNEL", (body) => {
+      body.appendChild(el("div", { class: "dim", style: "margin-bottom:8px; font-size:12px;" },
+        [`"${(v.title || "video").slice(0, 60)}" · ${mins} min — pick a channel and it's programmed into the guide.`]));
+      const chans = Object.keys((Net.library && Net.library.channels) || {}).sort();
+      const list = chans.length ? chans : ["03", "04", "05", "06", "07", "08"];
+      const today = WEEKDAYS[new Date().getDay()];
+      list.forEach((ch) => {
+        const g = sanitizeGuide3(Config.data.guide3 || {});
+        const blocks = ((g[ch] || {})[today]) || [];
+        const slot = this.findFreeSlot(blocks, mins);
+        const name = (Config.data.channel_names || {})[ch] || "";
+        const label = slot == null
+          ? `CH${ch} ${name} — FULL TODAY`
+          : `CH${ch} ${name} — ${pad2(Math.floor(slot / 60))}:${pad2(slot % 60)}`;
+        const b = el("button", { "data-focus": "", style: "display:block; width:100%; text-align:left; margin:3px 0;" }, [label]);
+        if (slot == null) b.disabled = true;
+        else b.addEventListener("click", () => { Modal.close(); this.scheduleVideo(v, ch, today, slot, mins); });
+        body.appendChild(b);
+      });
+      const c = el("button", { "data-focus": "", style: "margin-top:8px;" }, ["[ CANCEL ]"]);
+      c.addEventListener("click", () => Modal.close());
+      body.appendChild(c);
+    });
+  },
+  scheduleVideo(v, chan, day, start, mins) {
+    const g = sanitizeGuide3(Config.data.guide3 || {});
+    g[chan] = g[chan] || {};
+    WEEKDAYS.forEach((d) => { g[chan][d] = g[chan][d] || []; });
+    g[chan][day].push({ s: start, d: mins, f: "yt:" + v.id });
+    g[chan][day].sort((a, b) => a.s - b.s);
+    Config.set("guide3", g);
+    const list = this.savedList().filter((x) => x.id !== v.id);
+    list.unshift({ id: v.id, title: v.title || "", thumb: v.thumb || "",
+                   duration: v.duration || "", chan: chan, day: day, start: start, mins: mins });
+    LS.set("yt_saved", list.slice(0, 200));
+    this.paintSaveBtn();
+    const hhmm = pad2(Math.floor(start / 60)) + ":" + pad2(start % 60);
+    $("#yt-player-title").textContent = (v.title || "") + "  ·  ★ CH" + chan + " @ " + hhmm;
+  },
+  unscheduleVideo(id) {
+    const g = sanitizeGuide3(Config.data.guide3 || {});
+    let touched = false;
+    Object.keys(g).forEach((ch) => WEEKDAYS.forEach((d) => {
+      const before = (g[ch][d] || []).length;
+      g[ch][d] = (g[ch][d] || []).filter((b) => b.f !== "yt:" + id);
+      if (g[ch][d].length !== before) touched = true;
+    }));
+    if (touched) Config.set("guide3", g);
+  },
+  paintSaveBtn() {
+    const b = $("#yt-save-btn");
+    if (!b) return;
+    const on = this.current && this.isSaved(this.current.id);
+    b.textContent = on ? "★ SAVED" : "☆ SAVE";
+    b.classList.toggle("on", !!on);
+  },
+  showSaved() {
+    const list = this.savedList();
+    $("#yt-results").innerHTML = "";
+    if (!list.length) {
+      $("#yt-msg").textContent = "No saved videos yet — play something and tap ☆ SAVE.";
+      return;
+    }
+    $("#yt-msg").textContent = list.length + " saved video(s)";
+    this.renderVideos(list);
   },
   close() {
     this.stopPlayer();
@@ -3079,6 +3237,12 @@ const YT = {
       el("div", { class: "yt-meta dim" }, [(v.channel || "") + (v.views ? "  " + v.views : "")]),
     ]);
   },
+  renderVideos(list) {                              // plain render (saved list)
+    const box = $("#yt-results");
+    box.innerHTML = "";
+    this.seenIds = new Set();
+    (list || []).forEach((v) => { this.seenIds.add(v.id); box.appendChild(this.card(v)); });
+  },
   addCards(list) {                                  // append, skipping ids already shown; returns # added
     const box = $("#yt-results");
     if (!this.seenIds) this.seenIds = new Set();
@@ -3113,6 +3277,7 @@ const YT = {
       $("#yt-msg").textContent = "no results for \"" + msg.query + "\" (or YouTube is unreachable)";
       return;
     }
+    this.rememberSearch(msg.query);   // successful search -> offer it as a chip next time
     $("#yt-msg").textContent = "";
     this.addCards(msg.results);
     this.maybeFill();
@@ -3141,6 +3306,7 @@ const YT = {
     $("#yt-player-title").textContent = v.title || "";
     $("#yt-player").classList.remove("hidden");
     this.updateFab();
+    this.paintSaveBtn();
   },
   stopPlayer() {
     this.shuffle = false;
@@ -3207,6 +3373,8 @@ const YT = {
   },
 };
 function openYouTube() { YT.open(); }
+$("#yt-saved-btn") && $("#yt-saved-btn").addEventListener("click", () => YT.showSaved());
+$("#yt-save-btn") && $("#yt-save-btn").addEventListener("click", () => YT.toggleSave());
 $("#yt-search-btn") && $("#yt-search-btn").addEventListener("click", () => YT.search($("#yt-search-input").value));
 $("#yt-search-input") && $("#yt-search-input").addEventListener("keydown", (e) => { if (e.key === "Enter") YT.search(e.target.value); });
 $("#yt-full-btn") && $("#yt-full-btn").addEventListener("click", () => YT.openFull());
@@ -3534,15 +3702,64 @@ function renderGuideMain() {
   main.appendChild(grid);
 }
 
+/** Free minutes at `start` before the next block (or midnight). */
+function gapAt(blocks, start) {
+  const next = (blocks || []).filter(b => b.s > start).map(b => b.s);
+  return (next.length ? Math.min.apply(null, next) : 24 * 60) - start;
+}
+/** Does a block of `mins` starting at `start` fit without overlapping? */
+function blockFits(blocks, start, mins) {
+  if (start < 0 || start + mins > 24 * 60) return false;
+  return !(blocks || []).some(b => start < b.s + b.d && b.s < start + mins);
+}
+
 function placeGuideBlock(chan, day, start, file) {
   const guide3 = Config.data.guide3 || {};
   guide3[chan] = guide3[chan] || {};
   guide3[chan][day] = guide3[chan][day] || [];
-  guide3[chan][day].push({ s: start, d: Math.ceil(file.duration / 60), f: file.name });
+  const blocks = guide3[chan][day];
+  // Real runtime, rounded UP to the minute (a 22:10 show books 23 min, so the
+  // next block never starts mid-episode).
+  const mins = Math.max(1, Math.ceil((file.duration || 1800) / 60));
+  // Don't silently vanish: sanitizeGuide3 drops overlaps, so check FIRST and
+  // tell the operator what actually fits (bailey: slots vs real video length).
+  if (!blockFits(blocks, start, mins)) {
+    const free = Math.max(0, gapAt(blocks, start));
+    const hh = pad2(Math.floor(start / 60)), mm = pad2(start % 60);
+    Modal.open("WON'T FIT", (body) => {
+      body.appendChild(el("div", {}, [
+        `"${file.name}" runs ${mins} min, but only ${free} min are free at ${hh}:${mm}.`]));
+      body.appendChild(el("div", { class: "dim", style: "margin-top:6px; font-size:12px;" },
+        ["Pick a later slot, or remove the block that follows it."]));
+      const alt = findNextFreeStart(blocks, mins, start);
+      if (alt != null) {
+        const b = el("button", { "data-focus": "", style: "margin-top:10px; display:block;" },
+          [`[ SCHEDULE AT ${pad2(Math.floor(alt / 60))}:${pad2(alt % 60)} INSTEAD ]`]);
+        b.addEventListener("click", () => { Modal.close(); placeGuideBlock(chan, day, alt, file); });
+        body.appendChild(b);
+      }
+      const c = el("button", { "data-focus": "", style: "margin-top:8px;" }, ["[ CANCEL ]"]);
+      c.addEventListener("click", () => Modal.close());
+      body.appendChild(c);
+    });
+    return;
+  }
+  blocks.push({ s: start, d: mins, f: file.name });
   const clean = sanitizeGuide3(guide3); // belt-and-suspenders, same as backend
   Config.set("guide3", clean);
   Guide.pendingFile = null;
   renderGuideMain();
+}
+/** Earliest start >= `from` where `mins` fits, else null. */
+function findNextFreeStart(blocks, mins, from) {
+  const sorted = (blocks || []).slice().sort((a, b) => a.s - b.s);
+  let cursor = Math.max(0, from || 0);
+  for (const b of sorted) {
+    if (b.s + b.d <= cursor) continue;
+    if (b.s - cursor >= mins) return cursor;
+    cursor = Math.max(cursor, b.s + b.d);
+  }
+  return (24 * 60 - cursor >= mins) ? cursor : null;
 }
 function removeGuideBlock(chan, day, start) {
   const guide3 = Config.data.guide3 || {};
