@@ -43,15 +43,6 @@ apt-get install -y liblgpio-dev || \
 apt-get install -y chromium-browser || apt-get install -y chromium || \
   log "WARNING: no chromium package found -- kiosk will not start"
 
-# GAMES: light systems (NES..N64/PS1) run in-browser via EmulatorJS (bundled in
-# app/vendor/emulatorjs). GameCube/Wii run in NATIVE Dolphin via the kiosk-swap
-# (gost-game.service). Dolphin needs the Pi 5's Vulkan driver (V3DV) -- OGL fails
-# to initialise under cage/Wayland. Best-effort so an x86 test build still works.
-apt-get install -y mesa-vulkan-drivers vulkan-tools || \
-  log "WARNING: mesa-vulkan-drivers unavailable -- Dolphin (GC/Wii) video will fail"
-apt-get install -y dolphin-emu || \
-  log "WARNING: dolphin-emu unavailable -- GameCube/Wii games won't launch (install later)"
-
 # pmtiles CLI (single Go binary) -- powers the turnkey offline map-region
 # download in NAV. Baked in at BUILD time so the device never installs a
 # binary at runtime. arm64 for the Pi; best-effort so an x86 test build skips.

@@ -1,3 +1,0 @@
-These CHIP-8 game ROMs are from the chip8Archive (https://github.com/JohnEarnest/chip8Archive),
-released into the PUBLIC DOMAIN (CC0). They are bundled unmodified so GOST ships with a few
-built-in, fully-offline games. The CHIP-8 emulator itself (app/vendor/chip8.js) is original.

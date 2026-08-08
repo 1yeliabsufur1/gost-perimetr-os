@@ -1,6 +1,0 @@
-EmulatorJS (https://github.com/EmulatorJS/EmulatorJS) is GPL-3.0 licensed.
-The libretro cores in data/cores/ are third-party emulator cores, each under its
-own license (mostly GPL/permissive). These files are vendored here UNMODIFIED to
-allow offline play; their own licenses apply to them -- not the MIT license that
-covers the rest of this project. No game ROMs are included or distributed.
-Source: https://cdn.emulatorjs.org/
