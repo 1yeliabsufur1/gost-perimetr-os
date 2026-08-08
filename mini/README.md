@@ -23,18 +23,57 @@ in direct sunlight. So GOST MINI shows the things that suit it:
 - **VITALS** — 12 V battery (hero number), coolant, fuel, range, hybrid charge.
 - **GRAPH** — one sample every 5 s: coolant warm-up, voltage sag, charge drain.
 
-## Install (on the Pi)
+## Setup — no keyboard or monitor needed
+
+A Pi Zero 2 W is awkward to plug a keyboard into, so do the whole thing over
+Wi-Fi + SSH. **Raspberry Pi Imager sets that up for you before the card is even
+written** — no custom image required.
+
+### 1. Write the card
+[Raspberry Pi Imager](https://www.raspberrypi.com/software/) →
+**Device:** Raspberry Pi Zero 2 W · **OS:** Raspberry Pi OS **Lite (64-bit)** ·
+**Storage:** your SD card.
+
+Then click the **⚙ gear / "Edit Settings"** and set:
+
+| Setting | Value |
+|---|---|
+| Hostname | `gostmini` |
+| Enable SSH | ✅ (use password authentication) |
+| Username / password | your choice — you'll SSH with these |
+| Configure wireless LAN | your Wi-Fi SSID + password |
+| Wireless LAN country | your country (**required**, or the radio stays off) |
+
+Write the card, put it in the Pi, power it up, and wait ~60 s for first boot.
+
+### 2. SSH in
 ```bash
-sudo apt install -y python3-pil python3-serial python3-gpiozero
-pip3 install waveshare-epd     # or clone Waveshare's e-Paper repo
-sudo rfcomm bind 0 <OBD_MAC>   # pair the adapter first with bluetoothctl
-python3 gostmini.py
+ssh <username>@gostmini.local
+```
+(If the name doesn't resolve, find the IP in your router's client list and use
+that instead.)
+
+### 3. One command installs everything
+```bash
+curl -fsSL https://raw.githubusercontent.com/1yeliabsufur1/gost-perimetr-os/main/mini/install.sh | bash
+```
+That installs the deps, enables SPI for the HAT, fetches the Waveshare driver,
+installs GOST MINI, and enables it at boot. Then `sudo reboot` (SPI needs it).
+
+### 4. Pair the OBD adapter (one time)
+```bash
+bluetoothctl
+  scan on          # find your adapter, note its MAC
+  pair <MAC>
+  trust <MAC>
+  quit
+sudo rfcomm bind 0 <MAC>      # becomes /dev/rfcomm0
 ```
 
-Run it at boot:
+Check on it any time:
 ```bash
-sudo cp gost-mini.service /etc/systemd/system/
-sudo systemctl enable --now gost-mini
+systemctl status gost-mini
+journalctl -u gost-mini -f
 ```
 
 ## Develop without the hardware
