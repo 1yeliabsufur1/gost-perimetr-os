@@ -557,6 +557,24 @@ html[data-pointer="touch"], html[data-pointer="touch"] *,
           <div id="drive-notconnected" class="hidden">*** NOT CONNECTED ***</div>
           <div id="drive-live-banner"></div>
           <div class="frame" data-title="OBD LINK"><div id="drive-link-box" class="dim" style="font-size:13px;"></div></div>
+          <div class="frame" data-title="VEHICLE"><div id="drive-vehicle-box" class="dim" style="font-size:14px;">Auto-detects from the VIN once the adapter links...</div></div>
+          <div class="frame" data-title="PERFORMANCE"><div id="drive-perf-box" style="font-size:13px;"></div></div>
+          <div class="frame" data-title="LIVE GRAPH">
+            <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px; flex-wrap:wrap;">
+              <select id="drive-graph-pid" data-focus style="font-size:12px;">
+                <option value="RPM">RPM</option>
+                <option value="SPEED">Speed (km/h)</option>
+                <option value="boost_psi">Boost (psi)</option>
+                <option value="ENGINE_LOAD">Engine Load %</option>
+                <option value="THROTTLE_POS">Throttle %</option>
+                <option value="COOLANT_TEMP">Coolant &deg;C</option>
+                <option value="mpg">MPG</option>
+                <option value="hp">HP (est)</option>
+              </select>
+              <span id="drive-graph-val" class="glow" style="font-size:14px;">--</span>
+            </div>
+            <canvas id="drive-graph" width="600" height="150" style="width:100%; height:150px; display:block; border:1px solid var(--line); background:var(--bg);"></canvas>
+          </div>
           <div class="frame" data-title="TROUBLE CODES"><div id="drive-dtc-box" style="font-size:13px;"></div></div>
           <div class="frame" data-title="TIRES (PSI)"><div id="drive-tires-box" style="font-size:13px;"></div></div>
           <div class="frame" data-title="LIVE DATA (RAW PIDS)"><div id="drive-raw-box" style="font-size:12px; font-family:inherit;"></div></div>
@@ -1883,6 +1901,53 @@ function buildHome() {
  * scans a roms/ folder the user fills (USB/TERM) and launches RetroArch, which
  * (like the app overlay) is killed by the universal BACK to return to the unit.
  * ========================================================================== */
+/* Live rolling graph of one OBD value (RPM/boost/etc.) in the DRIVE tab. */
+const LiveGraph = {
+  buf: [], max: 150, pid: "RPM",
+  push(t) {
+    const sel = $("#drive-graph-pid");
+    if (sel && sel.value !== this.pid) { this.pid = sel.value; this.buf = []; }
+    let val = null;
+    const d = t.derived || {}, v = t.values || {};
+    if (this.pid in d) val = d[this.pid];
+    else if (this.pid in v) val = v[this.pid];
+    val = (val == null || isNaN(val)) ? null : Number(val);
+    this.buf.push(val);
+    if (this.buf.length > this.max) this.buf.shift();
+    const vv = $("#drive-graph-val");
+    if (vv) vv.textContent = (val == null) ? "--" : (Math.round(val * 10) / 10);
+    this.draw();
+  },
+  draw() {
+    const cv = $("#drive-graph"); if (!cv) return;
+    const ctx = cv.getContext("2d"); const w = cv.width, h = cv.height;
+    const css = getComputedStyle(document.documentElement);
+    const bg = css.getPropertyValue("--bg").trim() || "#000";
+    const pri = css.getPropertyValue("--pri").trim() || "#ffb000";
+    const line = css.getPropertyValue("--line").trim() || "#555";
+    ctx.fillStyle = bg; ctx.fillRect(0, 0, w, h);
+    const nums = this.buf.filter(x => x != null);
+    if (!nums.length) return;
+    let mn = Math.min(...nums), mx = Math.max(...nums);
+    if (mn === mx) { mn -= 1; mx += 1; }
+    ctx.strokeStyle = line; ctx.globalAlpha = 0.35; ctx.lineWidth = 1;
+    for (let i = 1; i < 4; i++) { const y = h * i / 4; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
+    ctx.globalAlpha = 1; ctx.strokeStyle = pri; ctx.lineWidth = 2; ctx.beginPath();
+    let started = false;
+    for (let i = 0; i < this.buf.length; i++) {
+      const val = this.buf[i]; if (val == null) { started = false; continue; }
+      const x = w * i / (this.max - 1);
+      const y = h - (val - mn) / (mx - mn) * (h - 10) - 5;
+      if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    ctx.fillStyle = pri; ctx.globalAlpha = 0.7; ctx.font = "10px monospace";
+    ctx.fillText(String(Math.round(mx)), 3, 11);
+    ctx.fillText(String(Math.round(mn)), 3, h - 3);
+    ctx.globalAlpha = 1;
+  },
+};
+
 function renderDrive(t) {
   // Top-bar source indicator: unmistakable when we're on the real truck.
   const srcEl = $("#src-label");
@@ -1917,6 +1982,38 @@ function renderDrive(t) {
       (t.obd_port ? "\nPORT:   " + t.obd_port : "") + veh;
     link.style.whiteSpace = "pre-wrap";
   }
+  // Auto-detected vehicle (from the VIN)
+  const vbox = $("#drive-vehicle-box");
+  if (vbox) {
+    const veh = t.vehicle;
+    if (veh && veh.display) {
+      const pt = veh.powertrain ? veh.powertrain.toUpperCase() : ((t.vtype && t.vtype !== "unknown") ? t.vtype.toUpperCase() : "");
+      vbox.className = "";
+      vbox.innerHTML = '<span class="glow">' + veh.display + '</span>' + (pt ? '  ·  ' + pt : '') +
+        (veh.vin ? '<div class="dim" style="font-size:11px;margin-top:3px;">VIN ' + veh.vin + (veh.fuel ? '  ·  ' + veh.fuel : '') + '</div>' : '');
+    } else {
+      vbox.className = "dim";
+      vbox.textContent = (t.vtype && t.vtype !== "unknown")
+        ? ("Powertrain: " + t.vtype.toUpperCase() + " (VIN pending)")
+        : "Auto-detects from the VIN once the adapter links...";
+    }
+  }
+  // Performance metric tiles
+  const perf = $("#drive-perf-box");
+  if (perf) {
+    const d = t.derived || {};
+    const fmt = (x, dp) => (x == null || isNaN(x)) ? "--" : (dp ? (Math.round(x * 10) / 10) : Math.round(x));
+    const tiles = [
+      ["HP (est)", fmt(d.hp)], ["TORQUE (est)", fmt(d.torque)],
+      ["BOOST", fmt(d.boost_psi, 1) + " psi"], ["LOAD", fmt(d.engine_load) + "%"],
+      ["THROTTLE", fmt(d.throttle) + "%"], ["MPG", fmt(d.mpg, 1)],
+      ["AVG MPG", fmt(d.avg_mpg, 1)], ["0-60", d.last_060 != null ? d.last_060 + "s" : "--"],
+    ];
+    perf.innerHTML = '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;">' +
+      tiles.map(function (kv) { return '<div style="text-align:center;"><div class="dim" style="font-size:10px;letter-spacing:1px;">' + kv[0] + '</div><div class="glow" style="font-size:18px;">' + kv[1] + '</div></div>'; }).join('') +
+      '</div>';
+  }
+  LiveGraph.push(t);
   const dtcBox = $("#drive-dtc-box");
   if (dtcBox) {
     dtcBox.innerHTML = "";
