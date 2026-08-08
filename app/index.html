@@ -121,12 +121,46 @@
   --bg-grad:radial-gradient(ellipse at 50% -10%, #1a1030 0%, #0a0812 60%, #05040a 100%);
   --thumb-filter:saturate(1.25) contrast(1.05);
 }
-/* thick 'battle box' frame borders (base size now driven by --fsize) */
-[data-theme="undertale"] .frame { border-width:3px; }
-[data-theme="undertale"] .frame::before { letter-spacing:2px; }
+/* the BATTLE BOX: thick white double border (outer + inset inner line) */
+[data-theme="undertale"] .frame {
+  border:4px solid var(--line); background:#000;
+  box-shadow:inset 0 0 0 3px #000, inset 0 0 0 4px var(--line);
+  padding:20px 16px 16px;
+}
+[data-theme="undertale"] .frame::before { letter-spacing:2px; top:-12px; }
+/* menu buttons: UT-orange lettering in white boxes; SELECTED goes soul-yellow */
+[data-theme="undertale"] button { border:2px solid var(--line); background:#000; color:#ff7f27; font-size:1.05em; }
+[data-theme="undertale"] button:hover { background:#000; color:#ffff00; }
+[data-theme="undertale"] .selected, [data-theme="undertale"] .selected:focus { background:#000 !important; color:#ffff00 !important; box-shadow:inset 0 0 0 2px #ffff00; }
+[data-theme="undertale"] .tv-chan-row { border:2px solid var(--line); }
+[data-theme="undertale"] .tv-chan-row:hover { color:#ffff00; }
+/* slow heartbeat on the accent text -- DETERMINATION */
+[data-theme="undertale"] .glow { animation:soulPulse 2.6s ease-in-out infinite; }
+@keyframes soulPulse { 0%,100%{text-shadow:0 0 0 transparent} 50%{text-shadow:0 0 10px rgba(255,43,43,0.85)} }
+/* DELTARUNE: neon cyan/purple glow instead of the stark white */
+[data-theme="undertale"][data-dr] .frame { box-shadow:inset 0 0 0 3px #0a0812, inset 0 0 0 4px var(--line), 0 0 16px rgba(180,92,255,0.35); }
+[data-theme="undertale"][data-dr] .glow { text-shadow:0 0 8px var(--glow); animation:none; }
 /* pixel-font themes: bump the small panel-title labels too */
 [data-theme="gameboy"] .frame::before,
 [data-theme="undertale"] .frame::before { font-size:14px; }
+/* DMG menu windows: hard double border + chunky pixel drop-shadow (Zelda/Pokemon
+   GB dialog style), no rounding, no glow anywhere */
+[data-theme="gameboy"] .frame {
+  border:3px solid var(--pri); background:var(--bg);
+  box-shadow:inset 0 0 0 2px var(--bg), inset 0 0 0 4px var(--pri), 6px 6px 0 rgba(15,56,15,0.55);
+  padding:20px 14px 14px;
+}
+[data-theme="gameboy"] .frame::before { background:var(--bg); }
+[data-theme="gameboy"] button {
+  border:3px solid var(--pri); background:var(--bg); box-shadow:4px 4px 0 rgba(15,56,15,0.55); border-radius:0;
+}
+[data-theme="gameboy"] button:hover, [data-theme="gameboy"] button:focus { background:var(--dim); color:var(--bg); }
+[data-theme="gameboy"] button:active { transform:translate(3px,3px); box-shadow:1px 1px 0 rgba(15,56,15,0.55); }
+[data-theme="gameboy"] .selected::before { content:"\25B6 "; }   /* ▶ pokemon-style menu cursor */
+[data-theme="gameboy"] .tv-chan-row { border:3px solid var(--pri); box-shadow:4px 4px 0 rgba(15,56,15,0.4); }
+/* GBC variant keeps the pixel windows but glows in its neon palette */
+[data-theme="gameboy"][data-gbc] .frame { box-shadow:inset 0 0 0 2px var(--bg), inset 0 0 0 4px var(--line), 6px 6px 0 rgba(0,0,0,0.5); border-color:var(--line); }
+[data-theme="gameboy"][data-gbc] button { border-color:var(--line); box-shadow:4px 4px 0 rgba(0,0,0,0.5); }
 /* ---------- CYBERPUNK 2077 (acid yellow + cyan glitch on black, angular) ---------- */
 @font-face { font-family:"Rajdhani"; src:url("vendor/rajdhani.woff2") format("woff2"); font-weight:500 700; font-display:swap; }
 [data-theme="cyberpunk"] {
@@ -4596,6 +4630,46 @@ function renderAbout(info) {
       `OPERATOR: ${op.username}  //  PASSWORD: `, pwSpan, " ", toggle,
     ]));
   }
+  const changeBtn = el("button", { "data-focus": "", style: "margin-top:10px;" }, ["[ CHANGE NAME / PASSWORD ]"]);
+  changeBtn.addEventListener("click", openAccountModal);
+  box.appendChild(el("div", {}, [changeBtn]));
+}
+
+/* Change the operator name + login/SSH password from Settings -> ABOUT, so a
+ * user can flash the base image and configure their account without a reflash. */
+function openAccountModal() {
+  const op = LS.get("operator", null) || { username: "", password: "" };
+  Modal.open("OPERATOR ACCOUNT", (body) => {
+    body.appendChild(el("div", { class: "line" }, ["OPERATOR NAME"]));
+    const uname = el("input", { type: "text", "data-focus": "", autocomplete: "off", spellcheck: "false" });
+    uname.value = op.username || "";
+    body.appendChild(el("div", {}, [uname]));
+    body.appendChild(el("div", { class: "line", style: "margin-top:10px;" }, ["NEW PASSWORD  (min 4 chars; blank = keep current)"]));
+    const p1 = el("input", { type: "password", "data-focus": "" });
+    const p2 = el("input", { type: "password", "data-focus": "", placeholder: "confirm" });
+    body.appendChild(el("div", {}, [p1]));
+    body.appendChild(el("div", {}, [p2]));
+    const err = el("div", { class: "dim", style: "min-height:16px;" }, [""]);
+    body.appendChild(err);
+    const save = el("button", { "data-focus": "" }, ["[ SAVE ]"]);
+    save.addEventListener("click", () => {
+      const u = uname.value.trim(), a = p1.value, b = p2.value;
+      if (!u) { err.textContent = "ENTER A NAME"; return; }
+      if (a || b) {
+        if (a.length < 4) { err.textContent = "PASSWORD TOO SHORT (MIN 4)"; return; }
+        if (a !== b) { err.textContent = "PASSWORDS DO NOT MATCH"; return; }
+      }
+      const newpw = a || op.password || "";
+      LS.set("operator", { username: u, password: newpw });
+      // password change updates the real login/SSH password on the device
+      if (Net.connected && a) Net.send({ type: "setpass", username: u, password: a });
+      Modal.close();
+      renderAbout(LastInfo.data);
+    });
+    const cancel = el("button", { "data-focus": "" }, ["[ CANCEL ]"]);
+    cancel.addEventListener("click", () => Modal.close());
+    body.appendChild(el("div", { style: "margin-top:10px;" }, [save, cancel]));
+  });
 }
 
 /* ============================================================================
