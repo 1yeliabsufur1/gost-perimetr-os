@@ -1125,7 +1125,7 @@ const LS = {
 /* ------------------------------- config ---------------------------------- */
 const Config = {
   data: Object.assign({
-    setup_done: false, source_mode: "AUTO", theme: "gost", guide3: {}, dashcam: false, channel_names: {}, brightness: 100, gbc: false, dr: false, touch: false, crt: false, nav_voice: true, tv_volume: 100, tv_fill: false,
+    setup_done: false, source_mode: "AUTO", theme: "gost", guide3: {}, dashcam: false, channel_names: {}, brightness: 100, gbc: false, dr: false, touch: false, crt: false, nav_voice: true, tv_volume: 100, tv_fill: false, music_volume: 100, music_shuffle: false, music_repeat: "off",
   }, LS.get("config", {})),
   save() { LS.set("config", this.data); },
   set(key, value, fromRemote) {
@@ -3904,6 +3904,7 @@ Music.play = function (pool, track) {
   this.current = { pool, name: track.name, genre: track.genre, duration: track.duration };
   const audio = $("#global-audio");
   audio.src = Net.connected ? "/media/" + track.path : track.url;
+  if (Config.data.music_volume != null) audio.volume = Config.data.music_volume / 100;
   audio.play().catch(() => {});
   renderMusicTracks();
   renderNowPlaying();
@@ -3917,12 +3918,37 @@ Music.toggle = function () {
   }
   if (audio.paused) audio.play(); else audio.pause();
 };
-Music.playNextInView = function () {
-  const tracks = musicPoolTracks(this.pool).filter(t => this.selectedGenre === null || (t.genre || "UNSORTED") === this.selectedGenre);
-  if (!tracks.length || !this.current) return;
+/** Tracks currently in view (pool + genre filter) -- the playback queue. */
+Music.viewTracks = function () {
+  return musicPoolTracks(this.pool)
+    .filter(t => this.selectedGenre === null || (t.genre || "UNSORTED") === this.selectedGenre);
+};
+/** Step +1/-1 through the queue, honouring shuffle + repeat. `auto` = a track
+ *  ended by itself (so REPEAT ONE replays it); a tap always moves. */
+Music.step = function (dir, auto) {
+  const tracks = this.viewTracks();
+  if (!tracks.length) return;
+  if (!this.current) { this.play(this.pool, tracks[0]); return; }
+  const rep = Config.data.music_repeat || "off";      // off | all | one
+  if (auto && rep === "one") { this.play(this.pool, this.current); return; }
+  if (Config.data.music_shuffle && tracks.length > 1) {
+    let n; do { n = Math.floor(Math.random() * tracks.length); }
+    while (tracks[n].name === this.current.name);
+    this.play(this.pool, tracks[n]);
+    return;
+  }
   const idx = tracks.findIndex(t => t.name === this.current.name);
-  const next = tracks[(idx + 1) % tracks.length];
+  const nextIdx = idx + dir;
+  if (auto && rep === "off" && nextIdx >= tracks.length) return;   // end of queue: stop
+  const next = tracks[(nextIdx + tracks.length) % tracks.length];
   if (next) this.play(this.pool, next);
+};
+Music.playNextInView = function () { this.step(1, true); };   // fired on "ended"
+/** Restart the track if we're >3s in (like every car stereo), else go back. */
+Music.prev = function () {
+  const audio = $("#global-audio");
+  if (audio.currentTime > 3) { audio.currentTime = 0; return; }
+  this.step(-1, false);
 };
 Music.seekFrac = function (frac) {
   const audio = $("#global-audio");
@@ -3970,13 +3996,33 @@ function renderNowPlaying() {
   box.appendChild(wave);
   box.appendChild(el("div", { class: "np-progress" }, [fmtClockLen(audio.currentTime), "-" + fmtClockLen(dur - audio.currentTime)]));
   box.appendChild(el("div", { class: "np-bar-track" }, [el("div", { class: "np-bar-fill", style: `width:${frac * 100}%;` })]));
+  // Full transport: prev / play / next + shuffle + repeat (car-stereo basics)
+  const prevBtn = el("button", { "data-focus": "", title: "previous track" }, ["⏮"]);
+  prevBtn.addEventListener("click", () => Music.prev());
   const playBtn = el("button", { "data-focus": "" }, [audio.paused ? "▶ PLAY" : "⏸ PAUSE"]);
   playBtn.addEventListener("click", () => Music.toggle());
+  const nextBtn = el("button", { "data-focus": "", title: "next track" }, ["⏭"]);
+  nextBtn.addEventListener("click", () => Music.step(1, false));
+  const shufOn = !!Config.data.music_shuffle;
+  const shufBtn = el("button", { "data-focus": "", title: "shuffle" }, ["🔀"]);
+  if (shufOn) shufBtn.classList.add("selected");
+  shufBtn.addEventListener("click", () => { Config.set("music_shuffle", !Config.data.music_shuffle); renderNowPlaying(); });
+  const rep = Config.data.music_repeat || "off";
+  const repBtn = el("button", { "data-focus": "", title: "repeat: off / all / one" },
+    [rep === "one" ? "🔂" : "🔁"]);
+  if (rep !== "off") repBtn.classList.add("selected");
+  repBtn.addEventListener("click", () => {
+    Config.set("music_repeat", { off: "all", all: "one", one: "off" }[Config.data.music_repeat || "off"]);
+    renderNowPlaying();
+  });
   const volRow = el("div", { class: "np-vol-row" }, ["VOL"]);
   const volInput = el("input", { type: "range", min: "0", max: "100", value: String(Math.round(audio.volume * 100)), "data-focus": "" });
-  volInput.addEventListener("input", () => { audio.volume = volInput.value / 100; });
+  volInput.addEventListener("input", () => {
+    audio.volume = volInput.value / 100;
+    Config.set("music_volume", Number(volInput.value));   // remember it across tracks/boots
+  });
   volRow.appendChild(volInput);
-  box.appendChild(el("div", { class: "np-controls" }, [playBtn, volRow]));
+  box.appendChild(el("div", { class: "np-controls" }, [prevBtn, playBtn, nextBtn, shufBtn, repBtn, volRow]));
 }
 
 /* ============================================================================
