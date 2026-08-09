@@ -54,11 +54,17 @@ class MiniOBD:
             self._rebind()                    # maybe the bind was lost
             return False
         try:
-            self.ser = serial.Serial(self.port, self.baud, timeout=1)
+            self.ser = serial.Serial(self.port, self.baud, timeout=2)
             time.sleep(0.4)
-            for cmd in ("ATZ", "ATE0", "ATL0", "ATS0", "ATH0", "ATSP0"):
-                self._cmd(cmd, 0.3)
-            probe = self._cmd("0100", 0.6, 6.0)    # forces protocol search
+            # ATZ is a full RESET and takes ~1-2s. Rushing it (we used 0.3s)
+            # means its banner lands during the NEXT command and desyncs every
+            # reply after it -- which looked exactly like "adapter not
+            # answering" even though the ELM was fine.
+            self._cmd("ATZ", 2.0, max_read=5.0)
+            self.ser.reset_input_buffer()
+            for cmd in ("ATE0", "ATL0", "ATS0", "ATH0", "ATSP0"):
+                self._cmd(cmd, 0.35, max_read=3.0)
+            probe = self._cmd("0100", 1.0, 8.0)    # forces protocol search
             up = probe.upper()
             if not probe.strip() or ("41 00" not in up and "4100" not in up.replace(" ", "")):
                 # Opened, but nothing answered. Nearly always the key is off, so
