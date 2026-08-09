@@ -49,23 +49,33 @@ else
   rm -rf "$TMP"
 fi
 
+log "installing SPI/GPIO libs the e-paper driver needs"
+sudo apt-get install -y --no-install-recommends python3-spidev python3-lgpio \
+  || warn "spidev/lgpio install had trouble -- the panel may not open"
+
 log "installing the Waveshare e-paper driver"
-if ! python3 -c "import waveshare_epd" 2>/dev/null; then
-  TMP="$(mktemp -d)"
-  if git clone --depth 1 https://github.com/waveshareteam/e-Paper "$TMP/e-Paper" 2>/dev/null; then
-    SRC="$TMP/e-Paper/RaspberryPi_JetsonNano/python/lib/waveshare_epd"
+if [ ! -d "$DEST/waveshare_epd" ]; then
+  # SPARSE clone of just the driver folder. The full e-Paper repo is >1GB of
+  # STM32/Arduino demos and blows out /tmp (208MB tmpfs on a Zero) mid-checkout.
+  # Cloning into $HOME (real disk) and checking out ONE directory avoids both.
+  WS="$HOME/.gost-ws-src"
+  rm -rf "$WS"
+  if git clone --depth 1 --filter=blob:none --sparse \
+        https://github.com/waveshareteam/e-Paper "$WS" >/dev/null 2>&1 \
+     && git -C "$WS" sparse-checkout set RaspberryPi_JetsonNano/python/lib/waveshare_epd >/dev/null 2>&1; then
+    SRC="$WS/RaspberryPi_JetsonNano/python/lib/waveshare_epd"
     if [ -d "$SRC" ]; then
-      SITE="$(python3 -c 'import site;print(site.getusersitepackages())')"
-      mkdir -p "$SITE"
-      cp -r "$SRC" "$SITE/"
-      log "waveshare_epd installed to $SITE"
+      # Install BESIDE the app: gostmini.py already puts its own dir on
+      # sys.path, so this dodges site-packages and PEP-668 entirely.
+      cp -r "$SRC" "$DEST/waveshare_epd"
+      log "waveshare_epd installed to $DEST/waveshare_epd"
     else
       warn "unexpected Waveshare layout -- install the driver manually"
     fi
   else
     warn "could not fetch the Waveshare driver (no network?); MINI will run in simulate mode"
   fi
-  rm -rf "$TMP"
+  rm -rf "$WS"
 fi
 
 log "installing the service"

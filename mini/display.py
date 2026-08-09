@@ -118,10 +118,24 @@ class Display:
 
     def sleep(self):
         """Deep-sleep the panel -- the image STAYS on screen with no power,
-        which is the whole point of e-paper for a portable code reader."""
+        which is the whole point of e-paper for a portable code reader.
+        Also releases the driver's GPIO/SPI worker so the interpreter can exit
+        cleanly (gpiozero's daemon thread otherwise dies mid-write and prints a
+        scary '_enter_buffered_busy' fatal error at shutdown)."""
         try:
             if self.epd:
                 self.epd.sleep()
+        except Exception:
+            pass
+        try:
+            from waveshare_epd import epdconfig
+            epdconfig.module_exit(cleanup=True)
+        except TypeError:
+            try:
+                from waveshare_epd import epdconfig
+                epdconfig.module_exit()
+            except Exception:
+                pass
         except Exception:
             pass
 
