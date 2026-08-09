@@ -482,9 +482,13 @@ a { color: var(--pri); }
 #hud-speed-wrap { position: relative; height: 160px; text-align: center; margin-bottom: 10px; }
 #hud-speed-wrap .ghost { position:absolute; inset:0; font-size: 110px; font-weight:bold; line-height:160px; }
 #hud-gauges { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
-.gauge .label { font-size: 11px; color: var(--dim); }
+/* Gauge labels were 11px -- unreadable at arm's length on the 7" panel
+   (bailey). Size them near the numbers and brighten them off --dim. */
+.gauge .label { font-size: 16px; letter-spacing: 1px; color: var(--pri); opacity: 0.85; }
 .gauge .bar { font-size: 18px; letter-spacing: -1px; }
-.gauge .num { font-size: 20px; }
+.gauge .num { font-size: 22px; }
+[data-touch] .gauge .label { font-size: 18px; }
+[data-touch] .gauge .num { font-size: 26px; }
 #hud-status-line { margin-top: 10px; font-size: 13px; border-top: 1px solid var(--line); padding-top: 6px; }
 .dtc-row { display:flex; justify-content:space-between; border-bottom: 1px dashed var(--line); padding: 4px 0; font-size: 13px; }
 
