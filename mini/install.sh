@@ -110,6 +110,37 @@ sudo chmod 440 /etc/sudoers.d/gost-mini
 sudo visudo -c -f /etc/sudoers.d/gost-mini >/dev/null 2>&1 || {
   warn "sudoers snippet invalid -- removing"; sudo rm -f /etc/sudoers.d/gost-mini; }
 
+log "installing the Wi-Fi watchdog (keeps the unit reachable in a vehicle)"
+sudo apt-get install -y --no-install-recommends avahi-daemon >/dev/null 2>&1 || true
+chmod +x "$DEST/gost-mini-wifi.sh" 2>/dev/null || true
+sudo tee /etc/systemd/system/gost-mini-wifi.service >/dev/null <<WIFIEOF
+[Unit]
+Description=GOST MINI Wi-Fi watchdog (power-save off + auto-reconnect + mDNS)
+After=NetworkManager.service network.target
+Wants=NetworkManager.service
+
+[Service]
+Type=simple
+ExecStart=$DEST/gost-mini-wifi.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+WIFIEOF
+sudo systemctl daemon-reload
+sudo systemctl enable gost-mini-wifi.service >/dev/null 2>&1
+
+log "installing PiSugar battery support"
+sudo raspi-config nonint do_i2c 0 2>/dev/null || true      # PiSugar talks I2C
+if ! systemctl list-unit-files 2>/dev/null | grep -q pisugar-server; then
+  # Official PiSugar power manager (installs pisugar-server on :8423, which
+  # gostmini.py reads for the battery %). Best-effort -- no PiSugar just means
+  # the battery corner stays blank.
+  curl -fsSL http://cdn.pisugar.com/release/pisugar-power-manager.sh -o /tmp/pisugar.sh     && sudo bash /tmp/pisugar.sh -c release >/dev/null 2>&1     && log "pisugar-server installed"     || warn "PiSugar server not installed -- battery %% will be blank"
+  rm -f /tmp/pisugar.sh
+fi
+
 log "installing the service"
 sudo tee /etc/systemd/system/gost-mini.service >/dev/null <<UNIT
 [Unit]
