@@ -43,28 +43,45 @@ FONT_XS = _font(9)
 
 class Display:
     def __init__(self, simulate=None, outdir="sim"):
-        self.simulate = simulate
+        self.simulate = bool(simulate)
         self.epd = None
         self.partials = 0
         self.outdir = outdir
         self._frame = 0
-        if simulate is None:
-            self.simulate = not self._init_panel()
-        elif not simulate:
-            self._init_panel()
+        self.driver = None
+        self.init_errors = []
+        if not simulate:                      # None or False -> try real hardware
+            # Fall back to the simulator if the panel can't be opened, and SAY SO
+            # loudly. Previously a failed init left epd=None and every refresh
+            # silently no-op'd, so the screen just kept its old image.
+            if not self._init_panel():
+                self.simulate = True
+                print("[mini] NO E-PAPER PANEL -- falling back to simulate mode")
+                for e in self.init_errors:
+                    print("[mini]   " + e)
+                print("[mini] run 'python3 diagnose.py' to see why")
         if self.simulate:
             os.makedirs(self.outdir, exist_ok=True)
 
     def _init_panel(self):
         """Try the Waveshare driver; several model revisions share this size."""
+        try:
+            import waveshare_epd  # noqa: F401
+        except Exception as e:
+            self.init_errors.append("waveshare_epd not importable: %s" % e)
+            return False
         for mod in ("epd2in13_V4", "epd2in13_V3", "epd2in13_V2", "epd2in13"):
             try:
                 m = __import__("waveshare_epd." + mod, fromlist=[mod])
                 self.epd = m.EPD()
                 self.epd.init()
                 self.epd.Clear(0xFF)
+                self.driver = mod
+                print("[mini] e-paper ready via %s" % mod)
                 return True
-            except Exception:
+            except Exception as e:
+                self.init_errors.append("%s: %s" % (mod, e))
+                self.epd = None
                 continue
         return False
 
