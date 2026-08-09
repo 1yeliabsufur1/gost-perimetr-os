@@ -20,15 +20,35 @@ if [ -f "$CONF" ]; then
   fi
 fi
 
-echo "Scanning for '$NAME_MATCH' (adapter must be powered -- ignition on)..."
-bluetoothctl --timeout 15 scan on >/dev/null 2>&1
-MAC="$(bluetoothctl devices 2>/dev/null | awk -v n="$NAME_MATCH" 'index($0,n){print $2; exit}')"
-[ -z "$MAC" ] && { echo "MX+ not found. Ignition on? Not connected to a phone?"; exit 1; }
+# The MX+ SLEEPS to protect the battery and only advertises in short bursts,
+# so a single scan-then-pair loses the race (bailey, repeatedly): it would be
+# found, then "not available" a second later. Hold a scan open and pair the
+# INSTANT it appears. Also clear any stale bond first -- reflashing the Pi
+# gives it a new Bluetooth identity, so the adapter's old key no longer
+# matches and the SPP channel is refused with "Permission denied".
+WAIT_SECS="${WAIT_SECS:-120}"
+echo "Waiting up to ${WAIT_SECS}s for '$NAME_MATCH' (ignition ON; press its button)..."
+command -v bt-agent >/dev/null 2>&1 && { pkill -f bt-agent 2>/dev/null; bt-agent -c NoInputNoOutput -d 2>/dev/null & sleep 1; }
+timeout $((WAIT_SECS + 20)) bluetoothctl --timeout $((WAIT_SECS + 15)) scan on >/dev/null 2>&1 &
+SCAN_PID=$!
+trap 'kill "$SCAN_PID" 2>/dev/null' EXIT
 
-# NoInputNoOutput agent auto-accepts "just works"; some MX+ units want PIN 1234
-# -- if this fails, fall back to a bt-agent PIN reply (see spec s10).
-bluetoothctl --agent NoInputNoOutput pair "$MAC" >/dev/null 2>&1
+MAC=""
+for _ in $(seq 1 $((WAIT_SECS / 2))); do
+  MAC="$(bluetoothctl devices 2>/dev/null | awk -v n="$NAME_MATCH" 'index($0,n){print $2; exit}')"
+  if [ -n "$MAC" ]; then
+    # pair immediately -- it may be asleep again within seconds
+    if bluetoothctl info "$MAC" 2>/dev/null | grep -qi "Paired: no"; then
+      bluetoothctl remove "$MAC" >/dev/null 2>&1; sleep 1
+    fi
+    bluetoothctl --agent NoInputNoOutput pair "$MAC" >/dev/null 2>&1
+    bluetoothctl info "$MAC" 2>/dev/null | grep -qi "Paired: yes" && break
+  fi
+  sleep 2
+done
+[ -z "$MAC" ] && { echo "MX+ not found. Ignition on? Not connected to a phone?"; exit 1; }
 bluetoothctl trust "$MAC" >/dev/null 2>&1
+bluetoothctl info "$MAC" 2>/dev/null | grep -qi "Paired: yes"   || echo "NOTE: not bonded -- continuing; some adapters serve SPP anyway"
 
 CH="$(sdptool browse "$MAC" 2>/dev/null | awk '/Serial Port/{sp=1} sp&&/Channel:/{print $2; exit}')"
 CH="${CH:-1}"
