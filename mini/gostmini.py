@@ -117,10 +117,18 @@ class Mini:
             while True:
                 if not self.obd.alive():
                     if not self.obd.connect():
+                        # Back off while nothing's there. This runs on a PiSugar
+                        # battery, so retrying every 5s with the truck switched
+                        # off would flatten it for no reason. 5s -> 60s.
+                        self._miss = min(getattr(self, "_miss", 0) + 1, 12)
                         self.batt = self.battery()
                         self.draw()
-                        time.sleep(5)
+                        time.sleep(min(5 * self._miss, 60))
                         continue
+                    # Fresh link -- e.g. the truck just started again. Re-read
+                    # the codes and drop stale samples from the last drive.
+                    self._miss = 0
+                    self.samples = []
                     self.refresh_codes()
                     self.draw(full=True)
 

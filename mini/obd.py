@@ -5,6 +5,7 @@ e-paper display actually needs: trouble codes + a handful of slow PIDs.
 Mirrors the protocol handling proven in the main GOST backend.
 """
 import glob
+import os
 import time
 
 try:
@@ -40,25 +41,78 @@ class MiniOBD:
         self.detail = ""
 
     def connect(self):
+        """Open the adapter and PROVE it answers. Just opening /dev/rfcomm0
+        isn't enough: after the truck is switched off the node still exists but
+        the far end is gone, so a bare open() can 'succeed' against a dead link.
+        We require a real reply before calling it connected."""
         if serial is None:
             self.detail = "pyserial not installed"
             return False
         self.port = self.port or find_port()
         if not self.port:
             self.detail = "no rfcomm device; is the adapter paired?"
+            self._rebind()                    # maybe the bind was lost
             return False
         try:
             self.ser = serial.Serial(self.port, self.baud, timeout=1)
             time.sleep(0.4)
             for cmd in ("ATZ", "ATE0", "ATL0", "ATS0", "ATH0", "ATSP0"):
                 self._cmd(cmd, 0.3)
-            self._cmd("0100", 0.6, 6.0)      # forces protocol search
+            probe = self._cmd("0100", 0.6, 6.0)    # forces protocol search
+            up = probe.upper()
+            if not probe.strip() or ("41 00" not in up and "4100" not in up.replace(" ", "")):
+                # opened, but nothing on the other end (key off / adapter asleep)
+                self.detail = "adapter not answering (key on?)"
+                self.close()
+                self._rebind()
+                return False
             self.detail = "linked on " + self.port
             return True
         except Exception as e:
-            self.detail = str(e)[:60]
+            msg = str(e)
+            self.detail = ("permission denied on %s -- add your user to 'dialout'" % self.port) \
+                if "Permission" in msg or "denied" in msg.lower() else msg[:60]
             self.ser = None
+            if "Permission" not in msg:
+                self._rebind()
             return False
+
+    def _rebind(self):
+        """Re-establish the rfcomm binding after a power cycle.
+
+        When the truck shuts off the adapter loses power and the rfcomm channel
+        dies; the /dev node can linger in a stale 'bound but not connected'
+        state that never heals on its own. Releasing and re-binding fixes it.
+        Rate-limited, best-effort, and silent when there's no MAC or no sudo."""
+        mac = self._saved_mac()
+        if not mac:
+            return
+        now = time.time()
+        if now - getattr(self, "_last_rebind", 0) < 30:
+            return
+        self._last_rebind = now
+        import subprocess
+        for args in (["sudo", "-n", "rfcomm", "release", "0"],
+                     ["sudo", "-n", "rfcomm", "bind", "0", mac]):
+            try:
+                subprocess.run(args, capture_output=True, timeout=10)
+            except Exception:
+                return
+        time.sleep(1.0)
+        self.port = find_port()
+
+    @staticmethod
+    def _saved_mac():
+        """MAC written by pair-obd.sh so we can re-bind unattended."""
+        for p in (os.path.expanduser("~/.gost-obd-mac"), "/etc/gost-obd-mac"):
+            try:
+                with open(p) as f:
+                    mac = f.read().strip()
+                if len(mac) == 17 and mac.count(":") == 5:
+                    return mac
+            except Exception:
+                continue
+        return None
 
     def alive(self):
         return self.ser is not None and self.ser.is_open

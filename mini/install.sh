@@ -82,6 +82,16 @@ if [ ! -d "$DEST/waveshare_epd" ]; then
   rm -rf "$WS"
 fi
 
+log "allowing the service to re-bind rfcomm after a power cycle"
+# When the truck is switched off the adapter loses power and the rfcomm channel
+# dies; GOST MINI re-binds it automatically, which needs these two commands.
+sudo tee /etc/sudoers.d/gost-mini >/dev/null <<SUDOEOF
+$USER_NAME ALL=(root) NOPASSWD: /usr/bin/rfcomm bind *, /usr/bin/rfcomm release *
+SUDOEOF
+sudo chmod 440 /etc/sudoers.d/gost-mini
+sudo visudo -c -f /etc/sudoers.d/gost-mini >/dev/null 2>&1 || {
+  warn "sudoers snippet invalid -- removing"; sudo rm -f /etc/sudoers.d/gost-mini; }
+
 log "installing the service"
 sudo tee /etc/systemd/system/gost-mini.service >/dev/null <<UNIT
 [Unit]

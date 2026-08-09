@@ -67,6 +67,11 @@ else
   echo "  (pairing may not have completed -- continuing; some adapters bind anyway)"
 fi
 
+# Remember the MAC so GOST MINI can re-bind itself after the truck is
+# switched off and back on (the rfcomm channel dies with the adapter's power).
+echo "$MAC" > "$HOME/.gost-obd-mac"
+echo "$MAC" | sudo tee /etc/gost-obd-mac >/dev/null 2>&1 || true
+
 say "binding /dev/rfcomm0"
 sudo rfcomm release 0 2>/dev/null || true
 sudo rfcomm bind 0 "$MAC" || die "rfcomm bind failed"
