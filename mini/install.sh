@@ -37,9 +37,10 @@ if [ -d "$DEST/.git" ]; then
 else
   rm -rf "$DEST"
   TMP="$(mktemp -d)"
-  # sparse clone: we only need mini/ and the shared DTC table
-  git clone --depth 1 --filter=blob:none --sparse "$REPO" "$TMP/repo"
-  git -C "$TMP/repo" sparse-checkout set mini backend/dtc_lookup.py
+  # Plain shallow clone. (A sparse checkout looks tempting, but cone mode only
+  # accepts DIRECTORIES -- passing backend/dtc_lookup.py made it fatal and
+  # set -e killed the installer silently after enabling SPI.)
+  git clone --depth 1 "$REPO" "$TMP/repo"
   mkdir -p "$DEST"
   cp -r "$TMP/repo/mini/." "$DEST/"
   # gostmini.py checks its own directory first, so the shared DTC table lives
