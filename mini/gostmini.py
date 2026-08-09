@@ -176,7 +176,17 @@ def main():
     ap.add_argument("--simulate", action="store_true", help="render PNGs to sim/ instead of a panel")
     ap.add_argument("--rotate", type=int, default=20,
                     help="auto-cycle screens every N seconds (0 = manual only)")
+    ap.add_argument("--clean", action="store_true",
+                    help="deep-scrub e-paper ghosting (black/white cycles) and exit")
     a = ap.parse_args()
+    if a.clean:
+        from display import Display, CLEAN_PASSES
+        d = Display(simulate=a.simulate)
+        print("[mini] deep cleaning (%d passes)..." % (CLEAN_PASSES + 2))
+        d.deep_clean(CLEAN_PASSES + 2)
+        d.sleep()
+        print("[mini] done -- the panel should be uniformly white")
+        return
     Mini(simulate=a.simulate, rotate_secs=a.rotate).run()
 
 

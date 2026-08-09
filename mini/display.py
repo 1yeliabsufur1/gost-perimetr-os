@@ -16,7 +16,9 @@ import time
 from PIL import Image, ImageDraw, ImageFont
 
 W, H = 250, 122            # 2.13" panel, landscape
-FULL_EVERY = 12            # clean the panel every N partial refreshes
+FULL_EVERY = 6             # full refresh every N partials (ghosting builds fast)
+DEEP_CLEAN_EVERY = 40      # full black/white flush cycle every N refreshes
+CLEAN_PASSES = 4           # black<->white inversions per deep clean
 
 
 def _font(size, bold=False):
@@ -75,8 +77,8 @@ class Display:
                 m = __import__("waveshare_epd." + mod, fromlist=[mod])
                 self.epd = m.EPD()
                 self.epd.init()
-                self.epd.Clear(0xFF)
                 self.driver = mod
+                self.deep_clean()          # start from a genuinely blank panel
                 print("[mini] e-paper ready via %s" % mod)
                 return True
             except Exception as e:
@@ -85,14 +87,33 @@ class Display:
                 continue
         return False
 
+    def deep_clean(self, passes=CLEAN_PASSES):
+        """Scrub ghosting by driving the panel fully BLACK then fully WHITE a
+        few times. E-ink particles that only partly moved on a previous update
+        leave a faint 'double exposure' of the old screen; a single Clear()
+        doesn't shift them, but alternating extremes does. ~2s per pass, so
+        this runs at startup and occasionally -- never on a routine update."""
+        if self.simulate or not self.epd:
+            return
+        try:
+            for i in range(max(1, passes)):
+                self.epd.Clear(0x00)       # all black
+                time.sleep(0.35)
+                self.epd.Clear(0xFF)       # all white
+                time.sleep(0.35)
+            self.partials = 0
+            self.refreshes = 0
+        except Exception as e:
+            print("[mini] deep clean failed:", e)
+
     def blank(self):
         """A fresh white 1-bit canvas + its ImageDraw."""
         img = Image.new("1", (W, H), 255)
         return img, ImageDraw.Draw(img)
 
     def show(self, img, full=False):
-        """Push a frame. Auto-promotes to a full refresh periodically so
-        ghosting doesn't build up."""
+        """Push a frame. Auto-promotes to a full refresh periodically, and runs
+        a black/white deep clean now and then, so ghosting can't accumulate."""
         if self.partials >= FULL_EVERY:
             full = True
         if self.simulate:
@@ -100,6 +121,10 @@ class Display:
             img.save(os.path.join(self.outdir, "frame_%03d.png" % self._frame))
             self.partials = 0 if full else self.partials + 1
             return
+        self.refreshes = getattr(self, "refreshes", 0) + 1
+        if self.refreshes >= DEEP_CLEAN_EVERY:
+            self.deep_clean(2)             # short scrub; the frame redraws below
+            full = True
         try:
             buf = self.epd.getbuffer(img.rotate(0))
             if full or not hasattr(self.epd, "displayPartial"):
