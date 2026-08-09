@@ -80,12 +80,16 @@ pair_try() {   # $1 = agent capability
 }
 
 say "pairing $MAC"
-# "just works" first (most modern adapters), then PIN-based as a fallback
+# Try to bond, but DON'T treat failure as fatal. The OBDLink MX+ reports
+# "Paired: no, Connected: yes" and serves SPP perfectly well without bonding --
+# the head unit's obd-bt-pair.sh ignores the pair result for exactly this
+# reason. What actually matters is whether the ECU answers, which we test at
+# the end.
 if pair_try NoInputNoOutput; then say "paired (just-works)"
 elif pair_try KeyboardOnly;   then say "paired (PIN $PIN)"
 else
+  say "no bonding (normal for OBDLink/ELM) -- continuing to the SPP link"
   bluetoothctl info "$MAC" 2>/dev/null | grep -iE "Paired|Connected" | sed 's/^/  /'
-  die "pairing failed -- is the ignition on? try: OBD_PIN=0000 ./pair-obd.sh"
 fi
 bluetoothctl trust "$MAC" >/dev/null 2>&1
 
