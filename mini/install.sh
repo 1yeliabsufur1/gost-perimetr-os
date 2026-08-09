@@ -89,7 +89,8 @@ Wants=bluetooth.service
 Type=simple
 User=$USER_NAME
 WorkingDirectory=$DEST
-ExecStart=/usr/bin/python3 $DEST/gostmini.py
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 -u $DEST/gostmini.py
 Restart=always
 RestartSec=8
 
