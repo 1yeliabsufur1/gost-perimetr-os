@@ -985,6 +985,41 @@ class RawOBD:
             out.append(self._decode_dtc(a, b))
         return out
 
+    # Body Control Module door status. Found empirically on bailey's 2023 F-150:
+    # the BCM answers mode-22 DID 0x402A on the NORMAL HS-CAN bus (pins 6/14,
+    # request 726 / reply 72E) -- NOT on pins 3/11, which are idle on this
+    # generation. Opening the driver's door took the byte 0x96 -> 0x84 and
+    # closing it returned it to 0x96 exactly (verified across a truck move, so
+    # it isn't voltage drift). Two bits move together: one for the specific
+    # door, one for "any door ajar".
+    DOOR_DID = "402A"
+    DOOR_HDR = "726"
+    DOOR_RESP = "72E"
+
+    def read_doors(self):
+        """Raw BCM door byte, or None. Restores the normal header afterwards so
+        routine PID polling is unaffected."""
+        try:
+            self._cmd("ATSH" + self.DOOR_HDR, 0.2)
+            self._cmd("ATCRA" + self.DOOR_RESP, 0.2)
+            resp = self._cmd("22" + self.DOOR_DID, 0.3, 1.5)
+        finally:
+            # back to broadcast addressing or standard PIDs stop answering
+            self._cmd("ATCRA", 0.15)
+            self._cmd("ATSH7DF", 0.15)
+        up = resp.upper().replace(" ", "")
+        i = up.find("62" + self.DOOR_DID)
+        if i < 0:
+            return None
+        data = up[i + 6:]
+        hexs = "".join(c for c in data if c in "0123456789ABCDEF")
+        if len(hexs) < 2:
+            return None
+        try:
+            return int(hexs[:2], 16)
+        except ValueError:
+            return None
+
     def read_dtcs(self):
         """Read ALL trouble codes the truck stores, across all responding ECUs:
         mode 03 (stored/confirmed -- MIL on), 07 (pending -- seen this drive
@@ -2071,7 +2106,30 @@ class Telemetry:
                         self.dtc_path.write_text(json.dumps(self.dtcs, indent=2))
                     except Exception:
                         pass
-                self.doors = None  # door status needs body-control PIDs (TBD)
+                # Doors: BCM DID 0x402A on HS-CAN (see RawOBD.read_doors).
+                # We know the byte changes with a door but not yet which bit is
+                # which, so LEARN the all-closed value (the state the truck is
+                # in most of the time) and report "ajar" when it differs.
+                if self.use_raw and self.raw is not None and                         time.time() - getattr(self, "_last_door", 0) > 2:
+                    self._last_door = time.time()
+                    try:
+                        b = await asyncio.get_event_loop().run_in_executor(
+                            None, self.raw.read_doors)
+                    except Exception:
+                        b = None
+                    if b is not None:
+                        # Bit 0x10 = DRIVER door (set = closed, clear = open),
+                        # verified twice on the truck. Bit 0x02 toggles about
+                        # once a second on its own -- a heartbeat, not a door --
+                        # so it MUST be masked out or the UI flickers.
+                        # The other doors/hood/tailgate do NOT appear in this
+                        # byte (they stayed put while every one was opened), so
+                        # they live in a DID we haven't found yet.
+                        self.doors = {"raw": b,
+                                      "driver": not (b & 0x10),
+                                      "ajar": not (b & 0x10)}
+                    else:
+                        self.doors = None
                 self.tires = None  # TPMS is Ford mode-22, unmapped -- honest null
                 got = await self.poll_fast()
                 now = time.time()
