@@ -4,10 +4,11 @@ Wraps the Waveshare driver, and falls back to a PNG SIMULATOR when the real
 panel isn't present, so screens can be designed/verified off-hardware.
 
 E-paper reality that shapes everything here:
-  * a FULL refresh takes ~2s and flashes black/white -- use it sparingly
-  * a PARTIAL refresh is ~0.3s and is what we use for routine updates
-  * too many partials in a row leave ghosting, so we force a full refresh
-    every FULL_EVERY partials to clean the panel
+  * a FULL refresh takes ~2s and flashes black/white, but leaves a clean image
+  * a PARTIAL refresh is ~0.3s but GHOSTS badly on this panel -- the previous
+    screen stays faintly visible under the new one
+  * since MINI only updates every few seconds, we full-refresh by default and
+    additionally scrub with black/white cycles now and then
 Nothing here should be asked to draw faster than ~1 Hz.
 """
 import os
@@ -16,7 +17,11 @@ import time
 from PIL import Image, ImageDraw, ImageFont
 
 W, H = 250, 122            # 2.13" panel, landscape
-FULL_EVERY = 6             # full refresh every N partials (ghosting builds fast)
+# This panel ghosts badly on partial refresh, and GOST MINI only updates every
+# few SECONDS -- so partial's speed advantage buys nothing. Full-refresh every
+# frame by default; set GOST_MINI_PARTIAL=1 to trade cleanliness for speed.
+USE_PARTIAL = os.environ.get("GOST_MINI_PARTIAL") == "1"
+FULL_EVERY = 3             # if partials are enabled at all, clean up often
 DEEP_CLEAN_EVERY = 40      # full black/white flush cycle every N refreshes
 CLEAN_PASSES = 4           # black<->white inversions per deep clean
 
@@ -116,6 +121,13 @@ class Display:
         a black/white deep clean now and then, so ghosting can't accumulate."""
         if self.partials >= FULL_EVERY:
             full = True
+        # Identical frame? Don't touch the panel at all. The "searching for OBD"
+        # screen is unchanged for minutes at a time; redrawing it just burns
+        # battery and re-introduces ghosting.
+        sig = img.tobytes()
+        if sig == getattr(self, "_last_sig", None) and not full:
+            return
+        self._last_sig = sig
         if self.simulate:
             self._frame += 1
             img.save(os.path.join(self.outdir, "frame_%03d.png" % self._frame))
@@ -127,7 +139,7 @@ class Display:
             full = True
         try:
             buf = self.epd.getbuffer(img.rotate(0))
-            if full or not hasattr(self.epd, "displayPartial"):
+            if full or not USE_PARTIAL or not hasattr(self.epd, "displayPartial"):
                 if hasattr(self.epd, "init"):
                     try:
                         self.epd.init()
