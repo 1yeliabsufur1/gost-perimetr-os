@@ -36,21 +36,39 @@ else
 fi
 
 log "fetching GOST MINI -> $DEST"
-if [ -d "$DEST/.git" ]; then
-  git -C "$DEST" pull --ff-only || warn "pull failed; keeping what's there"
+# STAGE THEN SWAP. Never delete the working install before the new one is
+# proven good: an earlier version rm -rf'd $DEST first, and when a later step
+# failed the user was left with no install at all (and a service that could no
+# longer chdir into it).
+TMP="$(mktemp -d)"
+cleanup_tmp() { rm -rf "$TMP"; }
+trap cleanup_tmp EXIT
+# Plain shallow clone. (A sparse checkout looks tempting, but cone mode only
+# accepts DIRECTORIES -- passing backend/dtc_lookup.py made it fatal.)
+if ! git clone --depth 1 "$REPO" "$TMP/repo" 2>&1 | tail -2; then
+  die_msg="could not download GOST MINI"
+  if [ -d "$DEST" ]; then warn "$die_msg -- keeping the existing install"; else
+    echo "[gost-mini] $die_msg and nothing is installed" >&2; exit 1; fi
 else
-  rm -rf "$DEST"
-  TMP="$(mktemp -d)"
-  # Plain shallow clone. (A sparse checkout looks tempting, but cone mode only
-  # accepts DIRECTORIES -- passing backend/dtc_lookup.py made it fatal and
-  # set -e killed the installer silently after enabling SPI.)
-  git clone --depth 1 "$REPO" "$TMP/repo"
-  mkdir -p "$DEST"
-  cp -r "$TMP/repo/mini/." "$DEST/"
+  STAGE="$TMP/stage"
+  mkdir -p "$STAGE"
+  cp -r "$TMP/repo/mini/." "$STAGE/"
   # gostmini.py checks its own directory first, so the shared DTC table lives
   # right beside it (no stray ~/backend folder).
-  cp "$TMP/repo/backend/dtc_lookup.py" "$DEST/dtc_lookup.py"
-  rm -rf "$TMP"
+  cp "$TMP/repo/backend/dtc_lookup.py" "$STAGE/dtc_lookup.py"
+  # sanity-check the staged copy BEFORE touching what's installed
+  if [ -f "$STAGE/gostmini.py" ] && [ -f "$STAGE/display.py" ] && [ -f "$STAGE/dtc_lookup.py" ]; then
+    # keep the fetched e-paper driver + saved settings across upgrades
+    [ -d "$DEST/waveshare_epd" ] && cp -r "$DEST/waveshare_epd" "$STAGE/waveshare_epd"
+    rm -rf "$DEST.old"
+    [ -d "$DEST" ] && mv "$DEST" "$DEST.old"
+    mkdir -p "$(dirname "$DEST")"
+    mv "$STAGE" "$DEST"
+    rm -rf "$DEST.old"
+    log "installed $(ls "$DEST"/*.py | wc -l) files"
+  else
+    warn "downloaded copy looks incomplete -- keeping the existing install"
+  fi
 fi
 
 log "installing SPI/GPIO libs the e-paper driver needs"
