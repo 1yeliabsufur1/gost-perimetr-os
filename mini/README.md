@@ -23,7 +23,27 @@ in direct sunlight. So GOST MINI shows the things that suit it:
 - **VITALS** — 12 V battery (hero number), coolant, fuel, range, hybrid charge.
 - **GRAPH** — one sample every 5 s: coolant warm-up, voltage sag, charge drain.
 
-## Setup — no keyboard or monitor needed
+## Setup — flash the ready-made image
+
+The easiest path: flash `gost-mini.img.xz` from the
+[latest release](https://github.com/1yeliabsufur1/gost-perimetr-os/releases).
+It has the code, services, SPI/I2C and SSH already baked in — first boot
+installs the remaining packages and the e-paper driver, then the panel comes
+up on its own.
+
+1. [Raspberry Pi Imager](https://www.raspberrypi.com/software/) →
+   **Choose OS → Use custom** → pick `gost-mini.img.xz`
+2. Click the **⚙ gear / Edit Settings** and set **hostname** (`gostmini`),
+   **enable SSH**, your **username/password**, and **Wi-Fi + country**
+   *(the country matters — without it the radio stays off)*
+3. Write, boot, wait ~3 minutes for first-boot setup
+4. `ssh <user>@gostmini.local`, then pair the adapter **at the vehicle with the
+   ignition on**: `cd ~/gost-mini && ./pair-obd.sh`
+
+Building the image yourself: `sudo tools/build-mini-image.sh` (needs a
+Raspberry Pi OS Lite arm64 base image in `/root/minibuild/raspios.img.xz`).
+
+## Manual setup (existing Raspberry Pi OS install)
 
 A Pi Zero 2 W is awkward to plug a keyboard into, so do the whole thing over
 Wi-Fi + SSH. **Raspberry Pi Imager sets that up for you before the card is even
