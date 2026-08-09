@@ -61,14 +61,15 @@ That installs the deps, enables SPI for the HAT, fetches the Waveshare driver,
 installs GOST MINI, and enables it at boot. Then `sudo reboot` (SPI needs it).
 
 ### 4. Pair the OBD adapter (one time)
+**Plug the adapter into the OBD port and turn the key to accessory first** — it
+is powered by the car, so it doesn't broadcast otherwise. Then:
+
 ```bash
-bluetoothctl
-  scan on          # find your adapter, note its MAC
-  pair <MAC>
-  trust <MAC>
-  quit
-sudo rfcomm bind 0 <MAC>      # becomes /dev/rfcomm0
+cd ~/gost-mini && ./pair-obd.sh
 ```
+It finds the adapter by name, pairs, trusts, binds `/dev/rfcomm0`, and installs
+a unit so the bind survives reboots. No MAC typing. If auto-detection misses
+it, pass one: `./pair-obd.sh AA:BB:CC:DD:EE:FF`
 
 Check on it any time:
 ```bash
