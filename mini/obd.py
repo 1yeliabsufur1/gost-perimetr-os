@@ -61,11 +61,18 @@ class MiniOBD:
             probe = self._cmd("0100", 0.6, 6.0)    # forces protocol search
             up = probe.upper()
             if not probe.strip() or ("41 00" not in up and "4100" not in up.replace(" ", "")):
-                # opened, but nothing on the other end (key off / adapter asleep)
+                # Opened, but nothing answered. Nearly always the key is off, so
+                # the adapter has no power -- re-binding can't fix that and just
+                # churns the link. Only rebind after several failures in a row,
+                # which is the case that actually indicates a STALE binding.
                 self.detail = "adapter not answering (key on?)"
                 self.close()
-                self._rebind()
+                self._silent = getattr(self, "_silent", 0) + 1
+                if self._silent >= 6:
+                    self._silent = 0
+                    self._rebind()
                 return False
+            self._silent = 0
             self.detail = "linked on " + self.port
             return True
         except Exception as e:
@@ -74,7 +81,7 @@ class MiniOBD:
                 if "Permission" in msg or "denied" in msg.lower() else msg[:60]
             self.ser = None
             if "Permission" not in msg:
-                self._rebind()
+                self._rebind()          # a real open() error DOES suggest a stale bind
             return False
 
     def _rebind(self):
@@ -83,12 +90,12 @@ class MiniOBD:
         When the truck shuts off the adapter loses power and the rfcomm channel
         dies; the /dev node can linger in a stale 'bound but not connected'
         state that never heals on its own. Releasing and re-binding fixes it.
-        Rate-limited, best-effort, and silent when there's no MAC or no sudo."""
+        Rate-limited to once every 2 minutes, best-effort, silent without a MAC."""
         mac = self._saved_mac()
         if not mac:
             return
         now = time.time()
-        if now - getattr(self, "_last_rebind", 0) < 30:
+        if now - getattr(self, "_last_rebind", 0) < 120:
             return
         self._last_rebind = now
         import subprocess
