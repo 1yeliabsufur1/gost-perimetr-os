@@ -1225,56 +1225,107 @@ def _deep_probe(port, baud):
 
 
 def _mscan_probe(port, baud):
-    """MS-CAN body probe (executor). Switches an OBDLink EX/MX+ to Ford MS-CAN
-    (OBD pins 3/11, 125 kbps) -- the bus a normal HS-CAN ELM327 can't reach where
-    door/TPMS often live -- then passively sniffs it (headers on) and pokes the
-    BCM, logging everything so the door/TPMS frames can be reverse-engineered.
-    EXPERIMENTAL: the MS-CAN init + BCM addressing are best-guesses to be dialled
-    in against the real truck (a 2021 may route body data on gatewayed HS-CAN
-    instead). Returns (summary, logtext)."""
+    """Body-bus probe (executor). Sweeps the CAN configurations a Ford might use
+    on OBD pins 3/11, reports which one actually carries traffic, then captures
+    it and pokes the BCM.
+
+    Why a sweep: the first version hard-coded `ATPB 40 08`. On an ELM327 that
+    second byte is a BAUD DIVISOR -- baud = 500 kbps / yy -- so 08 meant
+    62.5 kbps, not the 125 kbps Ford MS-CAN actually uses. It listened at the
+    wrong speed and logged 0 frames + CAN ERROR, which reads as "no bus". A 2021
+    truck may also not use classic MS-CAN at all (body data can sit on a
+    gatewayed HS-CAN2 at 500 kbps), so guessing once is the wrong shape -- try
+    them all and let the traffic decide. Returns (summary, logtext)."""
     import time as _t
     lines = []
-    raw = RawOBD(port, baud, "6")   # opens the port; we override the protocol below
+    raw = RawOBD(port, baud, "6")   # opens the port; protocol overridden below
 
     def c(cmd, wait=0.25, rd=0.5):
         return raw._cmd(cmd, wait, rd).replace("\r", " ").strip()
 
-    lines.append("# GOST MS-CAN / BODY probe %s" % datetime.now().isoformat())
-    lines.append("# needs an OBDLink EX/MX+ (STN chip). Switching to Ford MS-CAN.")
-    # Ford MS-CAN = ISO 15765 11-bit @ 125 kbps; ATSP B + ATPB 40 08. Headers ON
-    # so ATMA shows each frame's arbitration ID.
-    for cmd in ("ATZ", "ATE0", "ATL0", "ATS1", "ATH1", "ATSP B", "ATPB 40 08"):
-        lines.append("%-10s -> %s" % (cmd, c(cmd, 0.5 if cmd == "ATZ" else 0.25)))
+    def sniff(secs):
+        """ATMA for `secs`; return the frame lines."""
+        raw.ser.reset_input_buffer()
+        raw.ser.write(b"ATMA\r")
+        buf, end_t = b"", _t.time() + secs
+        while _t.time() < end_t:
+            n = raw.ser.in_waiting
+            if n:
+                buf += raw.ser.read(n)
+            else:
+                _t.sleep(0.01)
+        raw._cmd("", 0.1, 0.5)      # any character stops ATMA
+        out = buf.decode(errors="replace").replace("\r", "\n").split("\n")
+        return [l.strip() for l in out
+                if l.strip() and l.strip() != ">" and "STOPPED" not in l.upper()]
 
-    # ---- passive monitor: dump every MS-CAN broadcast frame for ~8s ----
-    lines.append("# --- passive ATMA 8s: OPEN/CLOSE A DOOR and note tire PSI NOW ---")
-    raw.ser.reset_input_buffer()
-    raw.ser.write(b"ATMA\r")
-    buf, end = b"", _t.time() + 8
-    while _t.time() < end:
-        n = raw.ser.in_waiting
-        if n:
-            buf += raw.ser.read(n)
-        else:
-            _t.sleep(0.01)
-    raw._cmd("", 0.1, 0.5)   # any char stops ATMA
-    frames = [l for l in buf.decode(errors="replace").replace("\r", "\n").split("\n")
-              if l.strip() and l.strip() != ">"]
-    lines.append("# MS-CAN passive frames: %d" % len(frames))
-    lines.extend("  " + f for f in frames[:150])
+    lines.append("# GOST BODY-BUS probe %s" % datetime.now().isoformat())
+    lines.append("# Sweeping CAN configs on OBD pins 3/11 (needs an OBDLink EX/MX+).")
+    for cmd in ("ATZ", "ATE0", "ATL0", "ATS1", "ATH1"):
+        lines.append("%-10s -> %s" % (cmd, c(cmd, 0.6 if cmd == "ATZ" else 0.25)))
 
-    # ---- active: poke the BCM/SJB directly on MS-CAN (candidate headers + DIDs) ----
-    lines.append("# --- active BCM query on MS-CAN (candidate headers/DIDs) ---")
-    for hdr in ("726", "737", "760"):
+    # (label, PB options+divisor). divisor 04=125k, 02=250k, 01=500k.
+    # options 40 = 11-bit IDs, 60 = 29-bit IDs.
+    CONFIGS = [
+        ("125k 11-bit (classic Ford MS-CAN)", "40 04"),
+        ("125k 29-bit", "60 04"),
+        ("500k 11-bit (gatewayed HS-CAN2)", "40 01"),
+        ("500k 29-bit", "60 01"),
+        ("250k 11-bit", "40 02"),
+    ]
+    best, best_frames, best_pb = None, [], None
+    lines.append("# --- sweep: 4s listen per config (WIGGLE A DOOR THROUGHOUT) ---")
+    for label, pb in CONFIGS:
+        c("ATSP B", 0.3)
+        r = c("ATPB " + pb, 0.3)
+        f = sniff(4)
+        lines.append("  %-34s ATPB %s -> %-6s frames: %d" % (label, pb, r[:6], len(f)))
+        if len(f) > len(best_frames):
+            best, best_frames, best_pb = label, f, pb
+
+    if not best_frames:
+        lines.append("# NO TRAFFIC on any config -- pins 3/11 look idle on this")
+        lines.append("# truck (body data gatewayed off the OBD port).")
+        raw.close()
+        summary = ("BODY-BUS PROBE DONE\n"
+                   "No traffic on any of %d configs.\n"
+                   "Pins 3/11 look idle here -- door/TPMS is probably gatewayed\n"
+                   "off the OBD port entirely." % len(CONFIGS))
+        return summary, "\n".join(lines) + "\n"
+
+    # ---- re-select the winning config and capture properly ----
+    lines.append("# --- WINNER: %s (ATPB %s), %d frames in 4s ---"
+                 % (best, best_pb, len(best_frames)))
+    c("ATSP B", 0.3)
+    c("ATPB " + best_pb, 0.3)
+    lines.append("# --- 10s capture: OPEN AND CLOSE A DOOR NOW ---")
+    frames = sniff(10)
+    lines.append("# frames: %d" % len(frames))
+    lines.extend("  " + f for f in frames[:400])
+
+    # Which arbitration IDs appeared, and how often. The ID whose payload
+    # changes when a door moves is the one worth decoding.
+    ids = {}
+    for f in frames:
+        parts = f.split()
+        if parts:
+            ids[parts[0]] = ids.get(parts[0], 0) + 1
+    lines.append("# --- arbitration IDs seen (id: count) ---")
+    for i, n in sorted(ids.items(), key=lambda kv: -kv[1])[:40]:
+        lines.append("  %s: %d" % (i, n))
+
+    # ---- active: poke the BCM/SJB with candidate DIDs ----
+    lines.append("# --- active BCM query (candidate headers/DIDs) ---")
+    for hdr in ("726", "737", "760", "7E0"):
         c("ATSH" + hdr, 0.25)
         for did in ("22DD00", "22DD01", "224028", "22411F"):
             lines.append("  %s@%s -> %s" % (did, hdr, c(did, 0.35, 0.6)))
     raw.close()
 
-    summary = ("MS-CAN PROBE DONE\npassive frames: %d\n"
-               "  0 = MS-CAN empty/absent (this 2021 likely routes body data on\n"
-               "      gatewayed HS-CAN) -- OBD dead-end, need a CAN tap or sensors.\n"
-               "  >0 = there's traffic we can decode -- share the log." % len(frames))
+    summary = ("BODY-BUS PROBE DONE\n"
+               "WINNER: %s\n%d frames, %d distinct IDs.\n"
+               "Share the log -- the ID whose bytes change with a door is the one."
+               % (best, len(frames), len(ids)))
     return summary, "\n".join(lines) + "\n"
 
 
