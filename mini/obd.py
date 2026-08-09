@@ -71,7 +71,9 @@ class MiniOBD:
                 # the adapter has no power -- re-binding can't fix that and just
                 # churns the link. Only rebind after several failures in a row,
                 # which is the case that actually indicates a STALE binding.
-                self.detail = "adapter not answering (key on?)"
+                self.detail = ("adapter not answering (key on?)"
+                               if not getattr(self, "last_error", "")
+                               else "serial error: " + self.last_error[:44])
                 self.close()
                 self._silent = getattr(self, "_silent", 0) + 1
                 if self._silent >= 6:
@@ -166,7 +168,12 @@ class MiniOBD:
                 elif out:
                     break
             return out.decode(errors="ignore")
-        except Exception:
+        except Exception as e:
+            # Don't swallow this: a silent close here looks identical to
+            # "adapter not answering" and hides the real serial fault.
+            self.last_error = "%s: %s" % (type(e).__name__, e)
+            if os.environ.get("GOST_OBD_DEBUG"):
+                print("[obd] %s failed -> %s" % (s, self.last_error))
             self.close()
             return ""
 
