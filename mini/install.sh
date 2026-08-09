@@ -21,7 +21,7 @@ sudo apt-get update -qq
 sudo apt-get install -y --no-install-recommends \
   python3 python3-pip python3-pil python3-serial python3-numpy \
   python3-gpiozero python3-smbus2 \
-  git bluez bluez-tools rfkill fonts-dejavu-core
+  git bluez bluez-tools bluez-hcidump rfkill fonts-dejavu-core
 
 log "granting serial access (dialout) -- /dev/rfcomm0 is root:dialout, so the"
 log "service user can't open the OBD adapter without this"
@@ -104,7 +104,7 @@ log "allowing the service to re-bind rfcomm after a power cycle"
 # When the truck is switched off the adapter loses power and the rfcomm channel
 # dies; GOST MINI re-binds it automatically, which needs these two commands.
 sudo tee /etc/sudoers.d/gost-mini >/dev/null <<SUDOEOF
-$USER_NAME ALL=(root) NOPASSWD: /usr/bin/rfcomm bind *, /usr/bin/rfcomm release *
+$USER_NAME ALL=(root) NOPASSWD: /usr/bin/rfcomm bind *, /usr/bin/rfcomm release *, /usr/bin/systemctl restart gost-obd-link.service
 SUDOEOF
 sudo chmod 440 /etc/sudoers.d/gost-mini
 sudo visudo -c -f /etc/sudoers.d/gost-mini >/dev/null 2>&1 || {

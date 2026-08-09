@@ -85,12 +85,12 @@ class MiniOBD:
             return False
 
     def _rebind(self):
-        """Re-establish the rfcomm binding after a power cycle.
+        """Nudge the supervised link service to re-establish the connection.
 
-        When the truck shuts off the adapter loses power and the rfcomm channel
-        dies; the /dev node can linger in a stale 'bound but not connected'
-        state that never heals on its own. Releasing and re-binding fixes it.
-        Rate-limited to once every 2 minutes, best-effort, silent without a MAC."""
+        gost-obd-link.service holds the link with `rfcomm connect` and systemd
+        reconnects it automatically, so this is only a fallback for the case
+        where that service isn't installed (e.g. a manual `rfcomm bind` setup).
+        Rate-limited to once every 2 minutes, best-effort."""
         mac = self._saved_mac()
         if not mac:
             return
@@ -99,6 +99,17 @@ class MiniOBD:
             return
         self._last_rebind = now
         import subprocess
+        try:
+            r = subprocess.run(["systemctl", "is-enabled", "gost-obd-link.service"],
+                               capture_output=True, text=True, timeout=5)
+            if "enabled" in r.stdout:
+                subprocess.run(["sudo", "-n", "systemctl", "restart", "gost-obd-link.service"],
+                               capture_output=True, timeout=15)
+                time.sleep(2)
+                self.port = find_port()
+                return
+        except Exception:
+            pass
         for args in (["sudo", "-n", "rfcomm", "release", "0"],
                      ["sudo", "-n", "rfcomm", "bind", "0", mac]):
             try:

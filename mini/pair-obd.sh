@@ -89,49 +89,63 @@ else
 fi
 bluetoothctl trust "$MAC" >/dev/null 2>&1
 
-# Remember the MAC so GOST MINI can re-bind itself after a power cycle.
+# Discover the real SPP channel -- hardcoding 1 is a common bug; the adapter
+# may advertise Serial Port on a different channel.
+CH="$(sdptool browse "$MAC" 2>/dev/null | awk '/Serial Port/{sp=1} sp&&/Channel:/{print $2; exit}')"
+CH="${CH:-1}"
+say "SPP channel: $CH"
+
+sudo install -d -m0755 /etc/gost-mini
+sudo tee /etc/gost-mini/obd-bt.conf >/dev/null <<CONFEOF
+OBD_BT_MAC=$MAC
+OBD_BT_CHANNEL=$CH
+OBD_RFCOMM_NODE=/dev/rfcomm0
+CONFEOF
 echo "$MAC" > "$HOME/.gost-obd-mac"
 echo "$MAC" | sudo tee /etc/gost-obd-mac >/dev/null 2>&1 || true
 
-say "binding /dev/rfcomm0"
+# Supervised `rfcomm connect` link -- NOT `bind`. bind leaves a node that never
+# truly connects; connect holds the link and systemd reconnects on ignition
+# cycles. (Same design as the head unit's obd-rfcomm service.)
+say "installing the supervised link service"
 sudo rfcomm release 0 2>/dev/null || true
-sudo rfcomm bind 0 "$MAC" || die "rfcomm bind failed"
-
-# make it survive reboots
-sudo tee /etc/systemd/system/gost-obd-bind.service >/dev/null <<UNITEOF
+sudo systemctl disable --now gost-obd-bind.service 2>/dev/null || true
+sudo rm -f /etc/systemd/system/gost-obd-bind.service
+DEST_DIR="$(cd "$(dirname "$0")" && pwd)"
+sudo tee /etc/systemd/system/gost-obd-link.service >/dev/null <<UNITEOF
 [Unit]
-Description=Bind the Bluetooth OBD adapter to /dev/rfcomm0
+Description=GOST MINI supervised Bluetooth OBD link (rfcomm connect)
 After=bluetooth.service
 Wants=bluetooth.service
 
 [Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=/usr/bin/rfcomm bind 0 $MAC
-ExecStop=/usr/bin/rfcomm release 0
+Type=simple
+ExecStart=$DEST_DIR/gost-obd-link.sh
+Restart=always
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
 UNITEOF
 sudo systemctl daemon-reload
-sudo systemctl enable gost-obd-bind.service >/dev/null 2>&1
+sudo systemctl enable --now gost-obd-link.service >/dev/null 2>&1
+sleep 6
+sudo rfcomm show 0 2>&1 | head -1 | sed 's/^/  /'
 
-ls -l /dev/rfcomm0 >/dev/null 2>&1 || die "no /dev/rfcomm0"
-say "verifying the ECU actually answers"
-sudo systemctl stop gost-mini 2>/dev/null || true
-sleep 1
-python3 - <<'PY'
+say "verifying the ECU answers"
+sudo systemctl restart gost-mini 2>/dev/null || true
+sleep 2
+python3 - <<'PY2'
 import sys, os
 sys.path.insert(0, os.path.expanduser("~/gost-mini"))
 try:
     from obd import MiniOBD
 except Exception as e:
-    print("  (could not import reader: %s)" % e); raise SystemExit
+    print("  (reader import failed: %s)" % e); raise SystemExit
 o = MiniOBD()
 print("  connected:", o.connect(), "|", o.detail)
 o.close()
-PY
-sudo systemctl start gost-mini 2>/dev/null || true
+PY2
 
 echo
-echo "  Done. Watch it:  journalctl -u gost-mini -f"
+echo "  Done. Watch it:  journalctl -u gost-obd-link -u gost-mini -f"
