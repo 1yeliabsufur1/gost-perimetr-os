@@ -112,6 +112,19 @@ def main():
     check("PiSugar battery", c_pisugar)
 
     print("\n-- panel --")
+    # The service holds SPI/GPIO while it runs, so a second process gets
+    # "GPIO busy" -- that's contention, not a hardware fault. Say so plainly.
+    try:
+        svc = subprocess.run(["systemctl", "is-active", "gost-mini"],
+                             capture_output=True, text=True, timeout=5).stdout.strip()
+    except Exception:
+        svc = ""
+    if svc == "active":
+        print("%s gost-mini is RUNNING and owns the panel (that's why you'd see" % WARN)
+        print("       'GPIO busy'). To drive the panel from here:")
+        print("         sudo systemctl stop gost-mini && python3 diagnose.py")
+        print("         sudo systemctl start gost-mini")
+        return 0
     from display import Display
     d = Display()                      # prints its own reason if it falls back
     if d.simulate:
