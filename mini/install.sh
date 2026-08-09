@@ -23,6 +23,10 @@ sudo apt-get install -y --no-install-recommends \
   python3-gpiozero python3-smbus2 \
   git bluez bluez-tools rfkill fonts-dejavu-core
 
+log "granting serial access (dialout) -- /dev/rfcomm0 is root:dialout, so the"
+log "service user can't open the OBD adapter without this"
+sudo usermod -aG dialout "$USER_NAME" || warn "could not add $USER_NAME to dialout"
+
 log "enabling SPI (required by the e-paper HAT)"
 if command -v raspi-config >/dev/null 2>&1; then
   sudo raspi-config nonint do_spi 0 || warn "could not enable SPI via raspi-config"
@@ -88,6 +92,7 @@ Wants=bluetooth.service
 [Service]
 Type=simple
 User=$USER_NAME
+SupplementaryGroups=dialout
 WorkingDirectory=$DEST
 Environment=PYTHONUNBUFFERED=1
 ExecStart=/usr/bin/python3 -u $DEST/gostmini.py

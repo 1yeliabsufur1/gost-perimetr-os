@@ -1,0 +1,5 @@
+# Shell scripts and systemd units run on Linux -- CRLF breaks line continuations
+# and shebangs, so keep them LF no matter what edits them on Windows.
+*.sh    text eol=lf
+*.service text eol=lf
+*.py    text eol=lf

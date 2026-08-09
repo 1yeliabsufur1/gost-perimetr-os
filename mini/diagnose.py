@@ -71,6 +71,23 @@ def c_serial():
                         else "no OBD device -- pair it, then: sudo rfcomm bind 0 <MAC>")
 
 
+def c_serial_access():
+    """/dev/rfcomm0 is root:dialout -- the service user must be in that group
+    or opening the adapter fails with EACCES (looks exactly like 'no link')."""
+    import glob, grp, os, pwd
+    hits = sorted(glob.glob("/dev/rfcomm*") + glob.glob("/dev/ttyUSB*") + glob.glob("/dev/ttyACM*"))
+    if not hits:
+        return False, "no port to test (pair the adapter first)"
+    me = pwd.getpwuid(os.getuid()).pw_name
+    groups = [g.gr_name for g in grp.getgrall() if me in g.gr_mem]
+    readable = os.access(hits[0], os.R_OK | os.W_OK)
+    if readable:
+        return True, "%s is read/write for %s" % (hits[0], me)
+    return False, ("%s NOT accessible by %s (groups: %s) -> "
+                   "sudo usermod -aG dialout %s && sudo systemctl restart gost-mini"
+                   % (hits[0], me, ",".join(groups) or "none", me))
+
+
 def c_pisugar():
     try:
         import pisugar
@@ -91,6 +108,7 @@ def main():
     check("gpiozero (buttons)", c_gpio_lib)
     print("\n-- peripherals --")
     check("OBD serial port", c_serial)
+    check("OBD port permissions", c_serial_access)
     check("PiSugar battery", c_pisugar)
 
     print("\n-- panel --")
