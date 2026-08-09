@@ -64,7 +64,7 @@ class MiniOBD:
             self.ser.reset_input_buffer()
             for cmd in ("ATE0", "ATL0", "ATS0", "ATH0", "ATSP0"):
                 self._cmd(cmd, 0.35, max_read=3.0)
-            probe = self._cmd("0100", 1.0, 8.0)    # forces protocol search
+            probe = self._cmd("0100", 0.5, 20.0)   # auto protocol search can take ~15s
             up = probe.upper()
             if not probe.strip() or ("41 00" not in up and "4100" not in up.replace(" ", "")):
                 # Opened, but nothing answered. Nearly always the key is off, so
@@ -158,15 +158,25 @@ class MiniOBD:
             self.ser.reset_input_buffer()
             self.ser.write((s + "\r").encode())
             time.sleep(wait)
+            # Read until the ELM's ">" PROMPT, which is the only reliable
+            # end-of-response marker. Bailing on the first pause (what we used
+            # to do) truncated "SEARCHING..." mid protocol-search, and the next
+            # command then aborted the search with "STOPPED" -- so 0100 never
+            # returned data and the adapter looked dead.
             out, t0 = b"", time.time()
+            searching = False
             while time.time() - t0 < max_read:
                 chunk = self.ser.read(self.ser.in_waiting or 1)
                 if chunk:
                     out += chunk
                     if b">" in out:
                         break
-                elif out:
-                    break
+                    if b"SEARCHING" in out.upper():
+                        searching = True     # a long quiet spell is expected now
+                elif out and not searching:
+                    # a gap with no prompt: only give up if it looks complete
+                    if out.strip().endswith(b">") or len(out) > 8:
+                        break
             return out.decode(errors="ignore")
         except Exception as e:
             # Don't swallow this: a silent close here looks identical to
