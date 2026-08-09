@@ -182,8 +182,8 @@ def main():
     if a.clean:
         from display import Display, CLEAN_PASSES
         d = Display(simulate=a.simulate)
-        print("[mini] deep cleaning (%d passes)..." % (CLEAN_PASSES + 2))
-        d.deep_clean(CLEAN_PASSES + 2)
+        print("[mini] deep cleaning (%d passes)..." % CLEAN_PASSES)
+        d.deep_clean(CLEAN_PASSES)
         d.sleep()
         print("[mini] done -- the panel should be uniformly white")
         return

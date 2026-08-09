@@ -22,8 +22,8 @@ W, H = 250, 122            # 2.13" panel, landscape
 # frame by default; set GOST_MINI_PARTIAL=1 to trade cleanliness for speed.
 USE_PARTIAL = os.environ.get("GOST_MINI_PARTIAL") == "1"
 FULL_EVERY = 3             # if partials are enabled at all, clean up often
-DEEP_CLEAN_EVERY = 40      # full black/white flush cycle every N refreshes
-CLEAN_PASSES = 4           # black<->white inversions per deep clean
+DEEP_CLEAN_EVERY = 150     # rare: full refreshes already keep it clean
+CLEAN_PASSES = 2           # black<->white inversions (4 flashes; 6 was excessive)
 
 
 def _font(size, bold=False):
