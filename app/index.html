@@ -2887,9 +2887,16 @@ function renderVehicle(t) {
   const names = Object.assign({}, VEH_NAMES,
     { trunk: vbody === "truck" ? "TAILGATE" : (vbody === "hatch" ? "HATCH" : "TRUNK"),
       hood: vbody === "sedan" || vbody === "van" ? "HOOD" : VEH_NAMES.hood });
-  const open = [];
+  // Live data only covers the openings we've actually decoded from the BCM
+  // (`mapped`); showcase data has no such list and covers all six. Anything
+  // outside it is UNKNOWN, not closed -- saying "ALL CLOSED // SECURE" while
+  // four openings are unmonitored is exactly the wrong thing to tell someone
+  // walking away from their truck.
+  const mapped = doors && doors.mapped;
+  const open = [], unknown = [];
   for (const p of Object.keys(names)) {
     if (vdoors === 2 && (p === "rl" || p === "rr")) continue;
+    if (mapped && mapped.indexOf(p) < 0) { unknown.push(names[p]); continue; }
     if (doors && doors[p]) open.push(names[p]);
   }
   if (!doors) {
@@ -2900,8 +2907,12 @@ function renderVehicle(t) {
       : "SHOWCASE: door status animates; live data needs body-control PIDs";
     list.textContent = "";
   } else {
-    banner.textContent = "";
-    list.textContent = open.length ? "⚠ OPEN: " + open.join("  //  ") : "ALL CLOSED // SECURE";
+    banner.textContent = unknown.length
+      ? "MONITORING " + (mapped.length) + " OF " + (unknown.length + mapped.length)
+        + " OPENINGS -- " + unknown.join(", ") + " NOT REPORTED BY THIS TRUCK'S BCM"
+      : "";
+    const secure = unknown.length ? "NO OPEN DOORS DETECTED" : "ALL CLOSED // SECURE";
+    list.textContent = open.length ? "⚠ OPEN: " + open.join("  //  ") : secure;
   }
 }
 

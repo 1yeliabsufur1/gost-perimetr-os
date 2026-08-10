@@ -986,33 +986,49 @@ class RawOBD:
         return out
 
     # Body Control Module door status. Found empirically on bailey's 2023 F-150:
-    # the BCM answers mode-22 DID 0x402A on the NORMAL HS-CAN bus (pins 6/14,
-    # request 726 / reply 72E) -- NOT on pins 3/11, which are idle on this
-    # generation. Opening the driver's door took the byte 0x96 -> 0x84 and
-    # closing it returned it to 0x96 exactly (verified across a truck move, so
-    # it isn't voltage drift). Two bits move together: one for the specific
-    # door, one for "any door ajar".
-    DOOR_DID = "402A"
+    # the BCM answers mode-22 on the NORMAL HS-CAN bus (pins 6/14, request 726 /
+    # reply 72E) -- NOT on pins 3/11, which are idle on this generation (a wide
+    # sweep there caught one repeating all-FF noise frame and nothing else).
+    #
+    # Two DIDs are confirmed, each by watching the byte through an open/close
+    # cycle at the truck:
+    #   402A  bit 0x10  driver's door   (SET = closed, CLEAR = open)
+    #                   0x96 -> 0x84 on open, back to 0x96 on close
+    #   406B  whole byte  rear driver's door  (01 = open, 00 = closed)
+    #
+    # The front passenger, rear passenger, tailgate and hood are NOT in either
+    # byte -- they were all cycled while a 20-DID watch ran and nothing moved,
+    # so they live somewhere we haven't swept yet (or aren't exposed over OBD).
+    # Don't guess at them: report only what's known and leave the rest null.
     DOOR_HDR = "726"
     DOOR_RESP = "72E"
+    DOOR_DIDS = ("402A", "406B")
 
     def read_doors(self):
-        """Raw BCM door byte, or None. Restores the normal header afterwards so
-        routine PID polling is unaffected."""
+        """{did: byte} for the BCM door DIDs, or None if the BCM didn't answer.
+        Restores broadcast addressing afterwards -- leave 726 set and the plain
+        mode-01 PIDs stop responding entirely."""
+        out = {}
         try:
             self._cmd("ATSH" + self.DOOR_HDR, 0.2)
             self._cmd("ATCRA" + self.DOOR_RESP, 0.2)
-            resp = self._cmd("22" + self.DOOR_DID, 0.3, 1.5)
+            for did in self.DOOR_DIDS:
+                b = self._did_byte(did, self._cmd("22" + did, 0.3, 1.5))
+                if b is not None:
+                    out[did] = b
         finally:
-            # back to broadcast addressing or standard PIDs stop answering
             self._cmd("ATCRA", 0.15)
             self._cmd("ATSH7DF", 0.15)
-        up = resp.upper().replace(" ", "")
-        i = up.find("62" + self.DOOR_DID)
+        return out or None
+
+    @staticmethod
+    def _did_byte(did, resp):
+        """First data byte of a `62 <did> ..` positive response, or None."""
+        up = (resp or "").upper().replace(" ", "")
+        i = up.find("62" + did)
         if i < 0:
             return None
-        data = up[i + 6:]
-        hexs = "".join(c for c in data if c in "0123456789ABCDEF")
+        hexs = "".join(c for c in up[i + 6:] if c in "0123456789ABCDEF")
         if len(hexs) < 2:
             return None
         try:
@@ -2106,28 +2122,35 @@ class Telemetry:
                         self.dtc_path.write_text(json.dumps(self.dtcs, indent=2))
                     except Exception:
                         pass
-                # Doors: BCM DID 0x402A on HS-CAN (see RawOBD.read_doors).
-                # We know the byte changes with a door but not yet which bit is
-                # which, so LEARN the all-closed value (the state the truck is
-                # in most of the time) and report "ajar" when it differs.
+                # Doors: BCM mode-22 on HS-CAN (see RawOBD.read_doors for how
+                # each bit was pinned down at the truck).
                 if self.use_raw and self.raw is not None and                         time.time() - getattr(self, "_last_door", 0) > 2:
                     self._last_door = time.time()
                     try:
-                        b = await asyncio.get_event_loop().run_in_executor(
+                        d = await asyncio.get_event_loop().run_in_executor(
                             None, self.raw.read_doors)
                     except Exception:
-                        b = None
-                    if b is not None:
-                        # Bit 0x10 = DRIVER door (set = closed, clear = open),
-                        # verified twice on the truck. Bit 0x02 toggles about
-                        # once a second on its own -- a heartbeat, not a door --
-                        # so it MUST be masked out or the UI flickers.
-                        # The other doors/hood/tailgate do NOT appear in this
-                        # byte (they stayed put while every one was opened), so
-                        # they live in a DID we haven't found yet.
-                        self.doors = {"raw": b,
-                                      "driver": not (b & 0x10),
-                                      "ajar": not (b & 0x10)}
+                        d = None
+                    if d:
+                        # 402A bit 0x02 toggles roughly once a second on its
+                        # own -- a heartbeat, not a door -- so only 0x10 is
+                        # trusted here. Unmapped openings stay None rather than
+                        # defaulting to "closed", which would be a lie.
+                        # Key names match the VEHICLE tab's diagram (fl/fr/rl/
+                        # rr/hood/trunk). `mapped` tells the UI which of those
+                        # are real readings so it can mark the rest UNKNOWN
+                        # instead of silently drawing them shut.
+                        st, mapped = {}, []
+                        if "402A" in d:
+                            st["fl"] = not (d["402A"] & 0x10)
+                            mapped.append("fl")
+                        if "406B" in d:
+                            st["rl"] = bool(d["406B"])
+                            mapped.append("rl")
+                        st["raw"] = d
+                        st["mapped"] = mapped
+                        st["ajar"] = any(st[k] for k in mapped) if mapped else None
+                        self.doors = st
                     else:
                         self.doors = None
                 self.tires = None  # TPMS is Ford mode-22, unmapped -- honest null
