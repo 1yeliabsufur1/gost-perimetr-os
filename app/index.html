@@ -806,16 +806,12 @@ html[data-pointer="touch"], html[data-pointer="touch"] *,
           <div class="frame" data-title="PERFORMANCE"><div id="drive-perf-box" style="font-size:13px;"></div></div>
           <div class="frame" data-title="LIVE GRAPH">
             <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px; flex-wrap:wrap;">
-              <select id="drive-graph-pid" data-focus style="font-size:12px;">
-                <option value="RPM">RPM</option>
-                <option value="SPEED">Speed (km/h)</option>
-                <option value="boost_psi">Boost (psi)</option>
-                <option value="ENGINE_LOAD">Engine Load %</option>
-                <option value="THROTTLE_POS">Throttle %</option>
-                <option value="COOLANT_TEMP">Coolant &deg;C</option>
-                <option value="mpg">MPG</option>
-                <option value="hp">HP (est)</option>
-              </select>
+              <!-- Options are built by LiveGraph.buildOptions() from
+                   GRAPH_CHANNELS so the labels and values follow the Settings
+                   units toggle. They used to be hardcoded here and drifted:
+                   "Coolant C" plotted 90 while the gauge beside it read
+                   195 F. -->
+              <select id="drive-graph-pid" data-focus style="font-size:12px;"></select>
               <span id="drive-graph-val" class="glow" style="font-size:14px;">--</span>
             </div>
             <canvas id="drive-graph" width="600" height="150" style="width:100%; height:150px; display:block; border:1px solid var(--line); background:var(--bg);"></canvas>
@@ -2315,15 +2311,64 @@ function buildHome() {
 }
 
 /* Live rolling graph of one OBD value (RPM/boost/etc.) in the DRIVE tab. */
+/* Graph channels. Each one owns its own label AND its own value lookup, so a
+ * channel can never be labelled in one unit and plotted in another -- which is
+ * exactly what went wrong before: the picker said "Coolant C" and plotted the
+ * raw Celsius PID (~90) while the gauge two inches away read ~195 F. Same
+ * name, two numbers, and 90 happens to look just like an oil-pressure reading.
+ * Speed and MPG had the same split (always km/h, always MPG) regardless of the
+ * Settings toggles. Reading a value goes through here or not at all. */
+const GRAPH_CHANNELS = [
+  { id: "RPM", label: () => "RPM", get: (v) => v.RPM },
+  // The HUD speedometer is mph everywhere; plotting the raw km/h PID next to
+  // it invited the same confusion, so derive from the same field the HUD uses.
+  { id: "mph", label: () => "Speed (mph)", get: (v, d) => d.mph },
+  { id: "boost_psi", label: () => "Boost (psi)", get: (v, d) => d.boost_psi },
+  { id: "ENGINE_LOAD", label: () => "Engine Load %", get: (v) => v.ENGINE_LOAD },
+  { id: "THROTTLE_POS", label: () => "Throttle %", get: (v) => v.THROTTLE_POS },
+  { id: "COOLANT_TEMP", label: () => "Coolant °" + unitTemp(),
+    get: (v, d) => (unitTemp() === "C" ? v.COOLANT_TEMP : d.coolant_f) },
+  // Oil temp is a HUD gauge but was never graphable -- an odd gap, since a
+  // slow climb in oil temp is exactly the thing worth watching over time.
+  { id: "OIL_TEMP", label: () => "Oil °" + unitTemp(),
+    get: (v, d) => (unitTemp() === "C" ? v.OIL_TEMP : d.oil_f) },
+  { id: "mpg", label: () => (unitEcon() === "KML" ? "KM/L" : "MPG"),
+    get: (v, d) => (d.mpg == null ? null
+                    : (unitEcon() === "KML" ? d.mpg * 0.425144 : d.mpg)) },
+  { id: "CONTROL_MODULE_VOLTAGE", label: () => "12V Battery",
+    get: (v) => v.CONTROL_MODULE_VOLTAGE },
+  { id: "hp", label: () => "HP (est)", get: (v, d) => d.hp },
+];
+
 const LiveGraph = {
-  buf: [], max: 150, pid: "RPM",
+  buf: [], max: 150, pid: "RPM", unitSig: "",
+  channel() {
+    return GRAPH_CHANNELS.find(c => c.id === this.pid) || GRAPH_CHANNELS[0];
+  },
+  /* Build/relabel the picker. Called on boot and whenever units change --
+   * option VALUES stay stable so the current selection survives a relabel. */
+  buildOptions() {
+    const sel = $("#drive-graph-pid");
+    if (!sel) return;
+    const keep = sel.value || this.pid;
+    sel.innerHTML = "";
+    for (const c of GRAPH_CHANNELS) {
+      const o = document.createElement("option");
+      o.value = c.id; o.textContent = c.label();
+      sel.appendChild(o);
+    }
+    if (GRAPH_CHANNELS.some(c => c.id === keep)) sel.value = keep;
+    this.pid = sel.value;
+  },
   push(t) {
     const sel = $("#drive-graph-pid");
     if (sel && sel.value !== this.pid) { this.pid = sel.value; this.buf = []; }
-    let val = null;
+    // Flipping F->C mid-drive would otherwise leave Celsius samples plotted
+    // against Fahrenheit ones on the same axis -- a nonsense trace.
+    const sig = unitTemp() + unitEcon();
+    if (sig !== this.unitSig) { this.unitSig = sig; this.buf = []; this.buildOptions(); }
     const d = t.derived || {}, v = t.values || {};
-    if (this.pid in d) val = d[this.pid];
-    else if (this.pid in v) val = v[this.pid];
+    let val = this.channel().get(v, d);
     val = (val == null || isNaN(val)) ? null : Number(val);
     this.buf.push(val);
     if (this.buf.length > this.max) this.buf.shift();
@@ -5041,12 +5086,17 @@ function buildSettings() {
     Net.send({ type: "obd.mscan" });
   });
   updateVehButtons();
-  const setUnit = (key, val) => { Config.set(key, val); updateUnitButtons(); };
+  // Relabel the graph picker immediately -- waiting for the next telemetry
+  // frame leaves "Coolant °F" showing while C is selected.
+  const setUnit = (key, val) => {
+    Config.set(key, val); updateUnitButtons(); LiveGraph.buildOptions();
+  };
   $("#unit-f-btn").addEventListener("click", () => setUnit("units_temp", "F"));
   $("#unit-c-btn").addEventListener("click", () => setUnit("units_temp", "C"));
   $("#unit-mpg-btn").addEventListener("click", () => setUnit("units_econ", "MPG"));
   $("#unit-kml-btn").addEventListener("click", () => setUnit("units_econ", "KML"));
   updateUnitButtons();
+  LiveGraph.buildOptions();   // picker is empty markup until this runs
   $("#wifi-scan-btn").addEventListener("click", () => Wifi.open());
   $("#tv-guide-btn").addEventListener("click", () => TvGuide.toggle());
   /* ---- TV viewing comfort: volume, mute, fit/fill (all persisted) ---- */
