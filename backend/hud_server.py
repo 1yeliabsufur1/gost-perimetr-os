@@ -1505,18 +1505,78 @@ def _deep_probe(port, baud):
     return summary, "\n".join(lines) + "\n"
 
 
-def _mscan_probe(port, baud):
-    """Body-bus probe (executor). Sweeps the CAN configurations a Ford might use
-    on OBD pins 3/11, reports which one actually carries traffic, then captures
-    it and pokes the BCM.
+def _body_frame_check(port, baud):
+    """Confirm the body broadcasts on the NORMAL HS-CAN, and decode them.
 
-    Why a sweep: the first version hard-coded `ATPB 40 08`. On an ELM327 that
-    second byte is a BAUD DIVISOR -- baud = 500 kbps / yy -- so 08 meant
-    62.5 kbps, not the 125 kbps Ford MS-CAN actually uses. It listened at the
-    wrong speed and logged 0 frames + CAN ERROR, which reads as "no bus". A 2021
-    truck may also not use classic MS-CAN at all (body data can sit on a
-    gatewayed HS-CAN2 at 500 kbps), so guessing once is the wrong shape -- try
-    them all and let the traffic decide. Returns (summary, logtext)."""
+    This replaced a pins-3/11 MS-CAN sweep as the first thing the button does.
+    That sweep was written to find where body data lives; we now know, and it
+    isn't there -- pins 3/11 are idle on this truck, and a full sweep of every
+    plausible baud and ID width caught one repeating all-FF frame and nothing
+    else. Leaving it as the headline test meant the button could only ever
+    report failure, which is a poor way to tell someone their doors work.
+
+    So: read what we know is there, and only fall back to sweeping if it's
+    genuinely absent. Returns (summary, logtext)."""
+    lines = ["# GOST BODY FRAME CHECK %s" % datetime.now().isoformat(),
+             "# Reading Ford's body broadcasts on the normal HS-CAN (pins 6/14)."]
+    raw = RawOBD(port, baud, "6")
+    found = []
+    try:
+        doors = raw.read_door_frame(timeout=2.0)
+        if doors:
+            found.append("doors")
+            lines.append("0x%s BodyInfo_3_FD1 -- PRESENT" % RawOBD.DOOR_FRAME_ID)
+            for name, ajar in sorted(doors.items()):
+                lines.append("    %-16s %s" % (name, "AJAR" if ajar else "closed"))
+            body = getattr(raw, "last_body", None) or {}
+            for k in ("ignition", "night", "dim", "dim_raw", "parklamps",
+                      "key_in", "parking_brake"):
+                if k in body:
+                    lines.append("    %-16s %s" % (k, body[k]))
+        else:
+            lines.append("0x%s BodyInfo_3_FD1 -- NOT SEEN" % RawOBD.DOOR_FRAME_ID)
+
+        tp = raw.read_tpms(timeout=2.5)
+        if tp:
+            found.append("tpms")
+            lines.append("0x%s Tire_Pressure_Data_FD1 -- PRESENT"
+                         % RawOBD.TPMS_FRAME_ID)
+            for name, psi in sorted(tp.items()):
+                lines.append("    %-16s %s" % (
+                    name, "%.1f psi" % psi if psi is not None else "no reading"))
+        else:
+            lines.append("0x%s Tire_Pressure_Data_FD1 -- NOT SEEN"
+                         % RawOBD.TPMS_FRAME_ID)
+    finally:
+        try:
+            raw.close()
+        except Exception:
+            pass
+
+    if found:
+        return ("BODY FRAMES OK\nFound: %s.\nDoors and tire pressures are "
+                "live on the normal HS-CAN -- no MS-CAN needed."
+                % ", ".join(found)), "\n".join(lines) + "\n"
+    lines.append("# Neither frame appeared -- falling back to the old "
+                 "pins-3/11 sweep below.")
+    summary, sweep = _mscan_probe(port, baud)
+    return ("NO BODY FRAMES on HS-CAN -- fell back to an MS-CAN sweep.\n\n"
+            + summary), "\n".join(lines) + "\n" + sweep
+
+
+def _mscan_probe(port, baud):
+    """Legacy fallback: sweep the CAN configurations a Ford might use on OBD
+    pins 3/11, report which one carries traffic, capture it and poke the BCM.
+
+    Kept only for trucks where the HS-CAN body frames are absent. On bailey's
+    2023 F-150 these pins are dead, so this is no longer the first thing tried
+    -- see _body_frame_check.
+
+    Why a sweep rather than one config: the first version hard-coded
+    `ATPB 40 08`. On an ELM327 that second byte is a BAUD DIVISOR -- baud =
+    500 kbps / yy -- so 08 meant 62.5 kbps, not the 125 kbps Ford MS-CAN
+    actually uses. It listened at the wrong speed and logged 0 frames + CAN
+    ERROR, which reads as "no bus". Returns (summary, logtext)."""
     import time as _t
     lines = []
     raw = RawOBD(port, baud, "6")   # opens the port; protocol overridden below
@@ -1778,17 +1838,19 @@ class Telemetry:
             self.diag_pause = False
 
     async def run_mscan(self):
-        """MS-CAN body probe (OBDLink EX/MX+): switch to Ford MS-CAN, sniff it and
-        poke the BCM to try reaching door/TPMS the HS-CAN port can't. Logs to the
-        boot partition. Experimental -- for reverse-engineering on the truck."""
+        """Body data check: confirm Ford's door and TPMS broadcasts on the
+        normal HS-CAN and decode them, falling back to the old pins-3/11
+        MS-CAN sweep only if they're genuinely missing. Logs to the boot
+        partition."""
         loop = asyncio.get_event_loop()
         self.diag_pause = True
         await asyncio.sleep(0.6)
         self._close_obd()
         try:
             port = self.obd_port or "/dev/ttyUSB0"
-            summary, logtext = await loop.run_in_executor(None, _mscan_probe, port, 115200)
-            path = _obd_capture_dir() + "/mscan-%d.log" % int(time.time())
+            summary, logtext = await loop.run_in_executor(
+                None, _body_frame_check, port, 115200)
+            path = _obd_capture_dir() + "/body-%d.log" % int(time.time())
             try:
                 with open(path, "w") as f:
                     f.write(logtext)
