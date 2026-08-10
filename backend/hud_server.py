@@ -875,6 +875,8 @@ class RawOBD:
 
     def __init__(self, port, baud, protocol):
         import serial
+        # "" = haven't decided yet, "frame" = 0x3B3 works, "did" = fall back.
+        self._door_src = ""
         self.ser = serial.Serial(port, baud, timeout=1)
         self.ser.write(b"\r")
         time.sleep(0.2)
@@ -1004,8 +1006,130 @@ class RawOBD:
     DOOR_RESP = "72E"
     DOOR_DIDS = ("402A", "406B")
 
+    # ---- the better way: the gateway BROADCASTS all of it ----
+    # Ford's own CAN database (comma.ai/opendbc, ford_lincoln_base_pt.dbc)
+    # defines message 947 = 0x3B3 "BodyInfo_3_FD1", 8 bytes, sent by the GWM.
+    # Two attributes on it matter here:
+    #   FrameGatewayNetwork = "HS1_CAN"  -> the normal HS-CAN on pins 6/14,
+    #                                       the bus we already talk to
+    #   U_P702_MY2021_Rx                 -> P702 is the F-150 platform, MY2021
+    # so this frame should be present on this truck, on a bus we can reach.
+    #
+    # Every opening is in it, which is why the DID sweep was the wrong tool:
+    # polling asks one question at a time, but this frame answers all of them
+    # at once, periodically, for free. Signals are 1-bit Motorola (@0+); for a
+    # 1-bit signal the DBC start bit maps straight to byte = bit // 8 and
+    # mask = 1 << (bit % 8).
+    #
+    #   DrStatTgate      bit 0  -> byte 0 mask 0x01
+    #   DrStatRl         bit 48 -> byte 6 mask 0x01
+    #   DrStatRr         bit 49 -> byte 6 mask 0x02
+    #   DrStatInnrTgate  bit 58 -> byte 7 mask 0x04
+    #   DrStatHood       bit 59 -> byte 7 mask 0x08
+    #   DrStatPsngr      bit 60 -> byte 7 mask 0x10
+    #   DrStatDrv        bit 61 -> byte 7 mask 0x20
+    #
+    # All are VAL_ 1 "Ajar" 0 "Closed" -- note this is the OPPOSITE polarity
+    # to DID 402A, where the bit is SET when the door is shut.
+    #
+    # UNVERIFIED ON THE TRUCK. Derived from the DBC, not yet watched through a
+    # door cycle, so read_doors() still falls back to the two DIDs we did
+    # confirm by hand if this frame never shows up.
+    DOOR_FRAME_ID = "3B3"
+    DOOR_FRAME_BITS = (
+        ("trunk", 0, 0x01),          # tailgate
+        ("rl", 6, 0x01),             # rear driver's
+        ("rr", 6, 0x02),             # rear passenger's
+        ("inner_tailgate", 7, 0x04),
+        ("hood", 7, 0x08),
+        ("fr", 7, 0x10),             # front passenger's
+        ("fl", 7, 0x20),             # driver's
+    )
+
+    def read_door_frame(self, timeout=0.8):
+        """Decode one 0x3B3 broadcast into {name: is_ajar}, or None.
+
+        Uses the adapter's own hardware filter (ATCRA) so ATMA only surfaces
+        this one ID instead of the whole bus, and returns the moment a
+        complete frame lands rather than sitting out the timeout -- the frame
+        repeats every ~100-200ms, so the usual cost is far below `timeout`
+        and the PID lane barely notices."""
+        buf = b""
+        try:
+            self._cmd("ATH1", 0.1)                       # need the ID visible
+            self._cmd("ATCRA" + self.DOOR_FRAME_ID, 0.15)
+            self.ser.reset_input_buffer()
+            self.ser.write(b"ATMA\r")
+            end = time.time() + timeout
+            while time.time() < end:
+                n = self.ser.in_waiting
+                if n:
+                    buf += self.ser.read(n)
+                    if self._frame_bytes(buf) is not None:
+                        break        # got a whole frame -- don't wait around
+                else:
+                    time.sleep(0.005)
+        except Exception:
+            return None
+        finally:
+            # ATMA streams until it receives ANY character. Then undo the
+            # filter and headers -- leaving either set breaks normal PID reads.
+            try:
+                self._cmd("", 0.1, 0.5)
+                self._cmd("ATCRA", 0.15)
+                self._cmd("ATH0", 0.15)
+            except Exception:
+                pass
+        data = self._frame_bytes(buf)
+        return None if data is None else self.decode_doors(data)
+
+    @classmethod
+    def decode_doors(cls, data):
+        """8 payload bytes -> {opening: is_ajar}."""
+        return {name: bool(data[i] & mask)
+                for name, i, mask in cls.DOOR_FRAME_BITS}
+
+    @classmethod
+    def _frame_bytes(cls, buf):
+        """Last complete '3B3 xx*8' frame in the monitor stream, as 8 ints."""
+        text = buf.decode(errors="ignore")
+        for line in reversed(text.replace("\r", "\n").split("\n")):
+            if not line.strip().upper().startswith(cls.DOOR_FRAME_ID):
+                continue
+            # The ID is 3 nibbles, so _hex_tokens drops it as odd-length: a
+            # complete 8-byte frame therefore tokenises to exactly 8, not 9.
+            toks = cls._hex_tokens(line)
+            if len(toks) >= 8:
+                try:
+                    return [int(t, 16) for t in toks[-8:]]
+                except ValueError:
+                    continue
+        return None
+
     def read_doors(self):
-        """{did: byte} for the BCM door DIDs, or None if the BCM didn't answer.
+        """Door state as {name: is_ajar} plus a "src" telling you where it came
+        from, or None.
+
+        Prefers the 0x3B3 broadcast (all seven openings, one frame). Falls back
+        to the two hand-verified DIDs when that frame doesn't appear, so a truck
+        that doesn't carry it is no worse off than before. Once the frame has
+        answered once we stop retrying the DIDs, and vice versa -- probing both
+        every cycle would double the cost for nothing."""
+        if self._door_src != "did":
+            frame = self.read_door_frame()
+            if frame:
+                self._door_src = "frame"
+                frame["src"] = "3B3"
+                return frame
+            if self._door_src == "frame":
+                # It worked before and just missed a window; don't thrash over
+                # to the DID path on one dropped frame.
+                return None
+            self._door_src = "did"      # frame absent -- stop asking for it
+        return self._read_doors_did()
+
+    def _read_doors_did(self):
+        """Fallback: the two BCM DIDs confirmed by hand on the 2023 F-150.
         Restores broadcast addressing afterwards -- leave 726 set and the plain
         mode-01 PIDs stop responding entirely."""
         out = {}
@@ -1019,7 +1143,14 @@ class RawOBD:
         finally:
             self._cmd("ATCRA", 0.15)
             self._cmd("ATSH7DF", 0.15)
-        return out or None
+        if not out:
+            return None
+        st = {"src": "did"}
+        if "402A" in out:
+            st["fl"] = not (out["402A"] & 0x10)   # SET = closed on this DID
+        if "406B" in out:
+            st["rl"] = bool(out["406B"])
+        return st
 
     @staticmethod
     def _did_byte(did, resp):
@@ -1570,12 +1701,85 @@ class Telemetry:
         finally:
             self.diag_pause = False
 
+    # Display names for the openings in the 0x3B3 frame.
+    DOOR_LABELS = {
+        "fl": "DRIVER DOOR", "fr": "PASSENGER DOOR",
+        "rl": "REAR DRIVER DOOR", "rr": "REAR PASSENGER DOOR",
+        "hood": "HOOD", "trunk": "TAILGATE",
+        "inner_tailgate": "INNER TAILGATE",
+    }
+
+    async def _watch_door_frame(self, raw, seconds):
+        """Stream the 0x3B3 broadcast and report each opening BY NAME as it
+        moves. This is how the bit map gets confirmed without a laptop in the
+        driveway: press the button, walk the truck, and every door announces
+        itself. One ATMA covers all of them at once, so unlike the DID sweep
+        there's no polling loop and nothing to miss between samples."""
+        loop = asyncio.get_event_loop()
+        self.state.broadcast({"type": "probe", "n": len(RawOBD.DOOR_FRAME_BITS),
+            "status": "WATCHING the body frame (0x3B3) -- open any door, hood "
+                      "or tailgate; each one will name itself"})
+
+        def setup():
+            raw._cmd("ATH1", 0.1)
+            raw._cmd("ATCRA" + RawOBD.DOOR_FRAME_ID, 0.15)
+            raw.ser.reset_input_buffer()
+            raw.ser.write(b"ATMA\r")
+
+        def restore():
+            raw._cmd("", 0.1, 0.5)      # any character stops ATMA
+            raw._cmd("ATCRA", 0.15)
+            raw._cmd("ATH0", 0.15)
+
+        await loop.run_in_executor(None, setup)
+        state, changes, seen = {}, 0, set()
+        buf = b""
+        end = time.time() + seconds
+        try:
+            while time.time() < end:
+                chunk = await loop.run_in_executor(
+                    None, lambda: raw.ser.read(raw.ser.in_waiting or 1))
+                # Frames arrive faster than we drain, and a read can land
+                # mid-line, so carry a rolling buffer and keep only the tail
+                # once parsed -- parsing chunks in isolation drops any frame
+                # that straddles a read boundary.
+                buf = (buf + chunk)[-512:]
+                data = RawOBD._frame_bytes(buf)
+                if data is not None:
+                    buf = buf[buf.rfind(b"\r") + 1:] if b"\r" in buf else b""
+                    cur = RawOBD.decode_doors(data)
+                    for name, ajar in cur.items():
+                        if name in state and state[name] != ajar:
+                            changes += 1
+                            seen.add(name)
+                            self.state.broadcast({"type": "probe", "changed": {
+                                "label": self.DOOR_LABELS.get(name, name),
+                                "old": "OPEN" if state[name] else "CLOSED",
+                                "new": "OPEN" if ajar else "CLOSED"}})
+                    state = cur
+                self.state.broadcast({"type": "probe",
+                    "status": "%ds left -- %d confirmed: %s" % (
+                        int(end - time.time()), len(seen),
+                        ", ".join(sorted(self.DOOR_LABELS.get(s, s)
+                                         for s in seen)) or "none yet")})
+                await asyncio.sleep(0.05)
+        finally:
+            await loop.run_in_executor(None, restore)
+        self.state.broadcast({"type": "probe", "done": True, "changes": changes})
+        if not seen:
+            return ("Body frame 0x3B3 is present but nothing moved -- "
+                    "open a door during the watch to confirm the mapping.")
+        return "Confirmed %d opening(s): %s." % (
+            len(seen), ", ".join(sorted(self.DOOR_LABELS.get(s, s) for s in seen)))
+
     async def run_watch(self, seconds=45):
         """LIVE DOOR TEST (bailey's idea): stream changing signals to the
         VEHICLE screen so opening a door gives instant visual confirmation.
-        Watches only the mode-22 Ford DIDs that actually answer (request/
-        response gets through the gateway; passive doesn't), polling them fast
-        and broadcasting any value change as it happens."""
+
+        Prefers the 0x3B3 body broadcast, which names every opening at once.
+        Falls back to the old blind mode-22 DID sweep on a truck that doesn't
+        carry that frame -- that sweep is how the driver's and rear driver's
+        doors were found in the first place, and it cost a lot of walking."""
         loop = asyncio.get_event_loop()
         self.diag_pause = True
         await asyncio.sleep(0.6)
@@ -1584,6 +1788,11 @@ class Telemetry:
         try:
             port = self.obd_port or "/dev/ttyUSB0"
             raw = await loop.run_in_executor(None, lambda: RawOBD(port, 115200, "6"))
+            frame = await loop.run_in_executor(None, raw.read_door_frame)
+            if frame:
+                return await self._watch_door_frame(raw, seconds)
+            self.state.broadcast({"type": "probe",
+                "status": "no 0x3B3 body frame -- falling back to a DID sweep"})
             await loop.run_in_executor(None, lambda: raw._cmd("ATH1", 0.2))
 
             def rd(cmd):
@@ -2132,24 +2341,22 @@ class Telemetry:
                     except Exception:
                         d = None
                     if d:
-                        # 402A bit 0x02 toggles roughly once a second on its
-                        # own -- a heartbeat, not a door -- so only 0x10 is
-                        # trusted here. Unmapped openings stay None rather than
-                        # defaulting to "closed", which would be a lie.
-                        # Key names match the VEHICLE tab's diagram (fl/fr/rl/
-                        # rr/hood/trunk). `mapped` tells the UI which of those
-                        # are real readings so it can mark the rest UNKNOWN
-                        # instead of silently drawing them shut.
-                        st, mapped = {}, []
-                        if "402A" in d:
-                            st["fl"] = not (d["402A"] & 0x10)
-                            mapped.append("fl")
-                        if "406B" in d:
-                            st["rl"] = bool(d["406B"])
-                            mapped.append("rl")
-                        st["raw"] = d
+                        # read_doors already speaks the diagram's key names
+                        # (fl/fr/rl/rr/hood/trunk). `mapped` is whichever of
+                        # them this truck actually reported -- the 0x3B3 frame
+                        # carries all six, the DID fallback only two. Anything
+                        # absent stays UNKNOWN in the UI rather than defaulting
+                        # to "closed", which would be a lie.
+                        mapped = [k for k in ("fl", "fr", "rl", "rr",
+                                              "hood", "trunk")
+                                  if isinstance(d.get(k), bool)]
+                        st = {k: d[k] for k in mapped}
                         st["mapped"] = mapped
-                        st["ajar"] = any(st[k] for k in mapped) if mapped else None
+                        st["src"] = d.get("src")
+                        if isinstance(d.get("inner_tailgate"), bool):
+                            st["inner_tailgate"] = d["inner_tailgate"]
+                        st["ajar"] = (any(st[k] for k in mapped)
+                                      if mapped else None)
                         self.doors = st
                     else:
                         self.doors = None
