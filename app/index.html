@@ -2493,7 +2493,8 @@ function renderDrive(t) {
     if (!tires) {
       tiresBox.innerHTML = "";
       tiresBox.appendChild(el("div", { class: "dim" },
-        [t.live ? "TPMS NOT AVAILABLE YET -- needs Ford-specific PIDs (in the works)" : "(showcase simulates TPMS)"]));
+        [t.live ? "NO TPMS READING -- this truck isn't broadcasting tire pressures (0x3B5)"
+                : "(showcase simulates TPMS)"]));
     } else {
       tiresBox.innerHTML = "";
       tiresBox.style.whiteSpace = "pre";
@@ -2945,11 +2946,12 @@ function renderVehicle(t) {
     if (doors && doors[p]) open.push(names[p]);
   }
   if (!doors) {
-    // Standard OBD has no door PIDs -- Ford exposes them via BCM-specific
-    // mode-22 requests we haven't mapped yet. Honest placeholder until then.
+    // Standard OBD has no door PIDs. GOST reads Ford's own 0x3B3 body
+    // broadcast instead, so "nothing here" now means the truck isn't sending
+    // it -- not that the feature is missing.
     banner.textContent = t && t.live
-      ? "DOOR STATUS NOT AVAILABLE YET -- needs Ford body-control PIDs (in the works)"
-      : "SHOWCASE: door status animates; live data needs body-control PIDs";
+      ? "NO DOOR DATA -- this truck isn't broadcasting the body frame (0x3B3)"
+      : "SHOWCASE: door status animates; live data comes from the body frame";
     list.textContent = "";
   } else {
     banner.textContent = unknown.length

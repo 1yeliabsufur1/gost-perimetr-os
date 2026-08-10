@@ -1046,18 +1046,35 @@ class RawOBD:
         ("fl", 7, 0x20),             # driver's
     )
 
-    def read_door_frame(self, timeout=0.8):
-        """Decode one 0x3B3 broadcast into {name: is_ajar}, or None.
+    # TPMS rides on the very next ID, same bus, same source:
+    # BO_ 949 (0x3B5) "Tire_Pressure_Data_FD1", 8 bytes, GWM, also HS1_CAN.
+    # Four 16-bit big-endian values, factor 1 offset 0, unit kilopascal:
+    #   Tire_Press_LF_Data      bit 7  -> bytes 0,1
+    #   Tire_Press_RF_Data      bit 23 -> bytes 2,3
+    #   Tire_Press_RR_ORR_Data  bit 39 -> bytes 4,5
+    #   Tire_Press_LR_OLR_Data  bit 55 -> bytes 6,7
+    # (Note the order is LF, RF, RR, LR -- NOT the LF/RF/LR/RR you'd expect.
+    # ORR/OLR are the outer rears on a dually; on an F-150 they're just the
+    # rears.) 65533 is the DBC's GenSigStartValue, i.e. "no reading".
+    #
+    # UNVERIFIED ON THE TRUCK, same as the door frame.
+    TPMS_FRAME_ID = "3B5"
+    TPMS_BYTES = (("fl", 0), ("fr", 2), ("rr", 4), ("rl", 6))
+    TPMS_MIN_KPA = 69     # ~10 psi -- below this it's a flat or a bad read
+    TPMS_MAX_KPA = 690    # ~100 psi -- above this it isn't a road tire
+
+    def monitor_frame(self, frame_id, timeout=0.8):
+        """Capture one broadcast of `frame_id` as 8 ints, or None.
 
         Uses the adapter's own hardware filter (ATCRA) so ATMA only surfaces
-        this one ID instead of the whole bus, and returns the moment a
-        complete frame lands rather than sitting out the timeout -- the frame
-        repeats every ~100-200ms, so the usual cost is far below `timeout`
-        and the PID lane barely notices."""
+        that one ID instead of the whole bus, and returns the moment a
+        complete frame lands rather than sitting out the timeout -- these
+        frames repeat every ~100-200ms, so the usual cost is far below
+        `timeout` and the PID lane barely notices."""
         buf = b""
         try:
-            self._cmd("ATH1", 0.1)                       # need the ID visible
-            self._cmd("ATCRA" + self.DOOR_FRAME_ID, 0.15)
+            self._cmd("ATH1", 0.1)                # need the ID visible
+            self._cmd("ATCRA" + frame_id, 0.15)
             self.ser.reset_input_buffer()
             self.ser.write(b"ATMA\r")
             end = time.time() + timeout
@@ -1065,7 +1082,7 @@ class RawOBD:
                 n = self.ser.in_waiting
                 if n:
                     buf += self.ser.read(n)
-                    if self._frame_bytes(buf) is not None:
+                    if self._frame_bytes(buf, frame_id) is not None:
                         break        # got a whole frame -- don't wait around
                 else:
                     time.sleep(0.005)
@@ -1080,8 +1097,17 @@ class RawOBD:
                 self._cmd("ATH0", 0.15)
             except Exception:
                 pass
-        data = self._frame_bytes(buf)
+        return self._frame_bytes(buf, frame_id)
+
+    def read_door_frame(self, timeout=0.8):
+        """{opening: is_ajar} from the 0x3B3 body broadcast, or None."""
+        data = self.monitor_frame(self.DOOR_FRAME_ID, timeout)
         return None if data is None else self.decode_doors(data)
+
+    def read_tpms(self, timeout=1.2):
+        """{corner: psi} from the 0x3B5 TPMS broadcast, or None."""
+        data = self.monitor_frame(self.TPMS_FRAME_ID, timeout)
+        return None if data is None else self.decode_tpms(data)
 
     @classmethod
     def decode_doors(cls, data):
@@ -1090,11 +1116,26 @@ class RawOBD:
                 for name, i, mask in cls.DOOR_FRAME_BITS}
 
     @classmethod
-    def _frame_bytes(cls, buf):
-        """Last complete '3B3 xx*8' frame in the monitor stream, as 8 ints."""
+    def decode_tpms(cls, data):
+        """8 payload bytes -> {corner: psi}, or None if nothing was sane.
+
+        Corners that report the not-available sentinel (65533) or a pressure
+        outside anything a road tire could hold come back None instead of a
+        number -- an invented PSI on the dash is worse than a dash."""
+        out = {}
+        for name, i in cls.TPMS_BYTES:
+            kpa = (data[i] << 8) | data[i + 1]
+            out[name] = (round(kpa * 0.1450377, 1)
+                         if cls.TPMS_MIN_KPA <= kpa <= cls.TPMS_MAX_KPA
+                         else None)
+        return out if any(v is not None for v in out.values()) else None
+
+    @classmethod
+    def _frame_bytes(cls, buf, frame_id):
+        """Last complete '<id> xx*8' frame in the monitor stream, as 8 ints."""
         text = buf.decode(errors="ignore")
         for line in reversed(text.replace("\r", "\n").split("\n")):
-            if not line.strip().upper().startswith(cls.DOOR_FRAME_ID):
+            if not line.strip().upper().startswith(frame_id.upper()):
                 continue
             # The ID is 3 nibbles, so _hex_tokens drops it as odd-length: a
             # complete 8-byte frame therefore tokenises to exactly 8, not 9.
@@ -2224,6 +2265,11 @@ class Telemetry:
         low = int(t / 20) % 2 == 1
         self.tires = {"fl": 36.0, "fr": 35.5, "rl": 36.0,
                       "rr": 27.5 if low else 34.0}
+        # Mark this body data as invented so the live path can throw it away.
+        # Without this, plugging into the truck would leave the showcase's
+        # tyre pressures and its cycling doors on screen looking like real
+        # readings until something happened to overwrite them.
+        self._body_is_demo = True
 
     async def poll_loop(self):
         last_med = 0.0
@@ -2302,6 +2348,15 @@ class Telemetry:
                     await asyncio.sleep(0.2)
                     continue
                 self.live = True
+                # Drop any showcase body data the moment real data takes over.
+                # Doors and TPMS are both read on a slow cadence, so without
+                # this the invented values would sit on screen -- labelled
+                # LIVE -- until the first real frame arrived, and forever on a
+                # truck that never answers.
+                if getattr(self, "_body_is_demo", False):
+                    self._body_is_demo = False
+                    self.doors = None
+                    self.tires = None
                 # One-time VIN read per link -> auto-identify the vehicle
                 # (make/model/year + powertrain, so a PowerBoost is known as a
                 # hybrid). Decoded online via NHTSA, offline via WMI fallback.
@@ -2360,7 +2415,23 @@ class Telemetry:
                         self.doors = st
                     else:
                         self.doors = None
-                self.tires = None  # TPMS is Ford mode-22, unmapped -- honest null
+                # TPMS: the 0x3B5 broadcast, one ID along from the doors on the
+                # same bus. Polled far more slowly than the doors -- tyre
+                # pressure moves over minutes, not seconds, and each read costs
+                # an ATMA window that the PID lane would otherwise be using.
+                # Keeps the last good reading between polls instead of blinking
+                # to "--" whenever a single frame is missed.
+                if self.use_raw and self.raw is not None and                         time.time() - getattr(self, "_last_tpms", 0) > 30:
+                    self._last_tpms = time.time()
+                    try:
+                        tp = await asyncio.get_event_loop().run_in_executor(
+                            None, self.raw.read_tpms)
+                    except Exception:
+                        tp = None
+                    if tp:
+                        self.tires = tp
+                elif not self.use_raw:
+                    self.tires = None   # python-obd path has no frame monitor
                 got = await self.poll_fast()
                 now = time.time()
                 if now - last_med > 0.4:
