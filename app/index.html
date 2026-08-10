@@ -785,14 +785,14 @@ html[data-pointer="touch"], html[data-pointer="touch"] *,
           <div class="frame" data-title="TROUBLE CODES"><div id="drive-dtc-box" style="font-size:13px;"></div></div>
           <div class="frame" data-title="TIRES (PSI)"><div id="drive-tires-box" style="font-size:13px;"></div></div>
           <div class="frame" data-title="LIVE DATA (RAW PIDS)"><div id="drive-raw-box" style="font-size:12px; font-family:inherit;"></div></div>
+          <!-- RUN OBD DIAGNOSTIC and CAPTURE OBD DATA were scaffolding for
+               working out what this truck exposes; that work is done, so they
+               don't belong on the screen you actually read while driving.
+               Both still exist under SETTINGS -> SOURCE for when the link
+               misbehaves, which it has a habit of doing. -->
           <div style="margin-top:8px;">
             <button data-focus id="drive-readcodes-btn">[ READ CODES NOW ]</button>
-            <button data-focus id="drive-diag-btn">[ RUN OBD DIAGNOSTIC ]</button>
             <span id="drive-diag-status" class="dim"></span>
-          </div>
-          <div style="margin-top:6px;">
-            <button data-focus id="drive-capture-btn">[ CAPTURE OBD DATA -> FILE ]</button>
-            <span class="dim" style="font-size:11px;"> saves everything the truck exposes to the boot drive for analysis (~40s)</span>
           </div>
         </div>
       </section>
@@ -952,9 +952,15 @@ html[data-pointer="touch"], html[data-pointer="touch"] *,
             <button data-focus id="src-auto-btn">AUTO (OBD2)</button>
             <button data-focus id="src-demo-btn">SHOWCASE</button>
           </div>
+          <!-- The troubleshooting tools live here now, off the driving
+               screens. Kept because every OBD problem so far has needed them. -->
           <div class="settings-row">
             <button data-focus id="obd-diag-btn">[ RUN OBD DIAGNOSTIC ]</button>
             <span id="obd-diag-status" class="dim"></span>
+          </div>
+          <div class="settings-row">
+            <button data-focus id="drive-capture-btn">[ CAPTURE OBD DATA -> FILE ]</button>
+            <span class="dim" style="font-size:11px;"> saves everything the truck exposes to the boot drive for analysis (~40s)</span>
           </div>
         </div>
         <div class="frame" data-title="UNITS">
@@ -5141,8 +5147,11 @@ function buildSettings() {
     Net.send({ type: "obd.diag" });
   };
   window.setDiagStatus = setDiagStatus;
-  $("#obd-diag-btn").addEventListener("click", startDiag);
-  $("#drive-diag-btn").addEventListener("click", startDiag);
+  // #drive-diag-btn was retired off the DIAG tab; bind whatever is present so
+  // moving a button around a screen can never take the whole UI down with it.
+  for (const id of ["#obd-diag-btn", "#drive-diag-btn"]) {
+    const b = $(id); if (b) b.addEventListener("click", startDiag);
+  }
   $("#drive-readcodes-btn").addEventListener("click", () => {
     if (!Net.connected) { setDiagStatus("REQUIRES DEVICE"); return; }
     setDiagStatus("READING CODES...");
