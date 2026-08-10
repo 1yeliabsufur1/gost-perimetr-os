@@ -877,6 +877,7 @@ class RawOBD:
         import serial
         # "" = haven't decided yet, "frame" = 0x3B3 works, "did" = fall back.
         self._door_src = ""
+        self.last_body = None    # ignition/lighting half of the last 0x3B3
         self.ser = serial.Serial(port, baud, timeout=1)
         self.ser.write(b"\r")
         time.sleep(0.2)
@@ -1046,6 +1047,24 @@ class RawOBD:
         ("fl", 7, 0x20),             # driver's
     )
 
+    # The same frame carries the truck's own lighting and ignition state, so
+    # these cost nothing extra -- we've already paid for the frame.
+    #   Ignition_Status      bit 7  4 bits -> byte 0 bits 7-4
+    #   Parklamp_Status      bit 3  2 bits -> byte 0 bits 3-2
+    #   Day_Night_Status     bit 15 2 bits -> byte 1 bits 7-6
+    #   Key_In_Ignition_Stat bit 11 1 bit  -> byte 1 bit 3
+    #   Dimming_Lvl          bit 31 8 bits -> byte 3
+    #   PrkBrkActv_B_Actl    bit 55 1 bit  -> byte 6 bit 7
+    # (For Motorola signals the DBC start bit is the MSB, so an n-bit signal
+    # starting at bit b occupies byte b//8 downward from bit b%8. Byte 0 packs
+    # tailgate, fog lamp, parklamp and ignition side by side without
+    # overlapping, which is a decent independent check on the door masks.)
+    IGNITION_STATES = {0: "unknown", 1: "off", 2: "accessory", 4: "run",
+                       8: "start", 15: "invalid"}
+    # Dimming_Lvl: 0 = off, 1-12 = Night_1..12, 13-18 = Day_1..6.
+    DIM_NIGHT_MAX = 12
+    DIM_DAY_MAX = 18
+
     # TPMS rides on the very next ID, same bus, same source:
     # BO_ 949 (0x3B5) "Tire_Pressure_Data_FD1", 8 bytes, GWM, also HS1_CAN.
     # Four 16-bit big-endian values, factor 1 offset 0, unit kilopascal:
@@ -1100,9 +1119,19 @@ class RawOBD:
         return self._frame_bytes(buf, frame_id)
 
     def read_door_frame(self, timeout=0.8):
-        """{opening: is_ajar} from the 0x3B3 body broadcast, or None."""
+        """{opening: is_ajar} from the 0x3B3 body broadcast, or None.
+
+        Also stashes the frame's ignition/lighting half on `last_body` -- it
+        arrived in the same eight bytes, so decoding it here is free and
+        avoids a second trip to the bus for data we already hold."""
         data = self.monitor_frame(self.DOOR_FRAME_ID, timeout)
-        return None if data is None else self.decode_doors(data)
+        if data is None:
+            return None
+        try:
+            self.last_body = self.decode_body(data)
+        except Exception:
+            self.last_body = None
+        return self.decode_doors(data)
 
     def read_tpms(self, timeout=1.2):
         """{corner: psi} from the 0x3B5 TPMS broadcast, or None."""
@@ -1114,6 +1143,35 @@ class RawOBD:
         """8 payload bytes -> {opening: is_ajar}."""
         return {name: bool(data[i] & mask)
                 for name, i, mask in cls.DOOR_FRAME_BITS}
+
+    @classmethod
+    def decode_body(cls, data):
+        """The non-door half of 0x3B3: ignition, lamps and the dash dimmer.
+
+        `dim` is normalised to 0.0-1.0 so the UI never has to know about
+        Ford's Night_1..12 / Day_1..6 ladder. "Unknown" (254) and "Invalid"
+        (255) come back as None -- the screen should stay as it is rather than
+        slam to black on a garbled frame."""
+        dn = (data[1] >> 6) & 0x03
+        raw_dim = data[3]
+        if raw_dim > cls.DIM_DAY_MAX:
+            dim = None                      # 254 unknown / 255 invalid
+        elif raw_dim == 0:
+            dim = 0.0                       # dimmer rolled fully off
+        elif raw_dim <= cls.DIM_NIGHT_MAX:
+            dim = raw_dim / float(cls.DIM_NIGHT_MAX)
+        else:
+            dim = 1.0                       # any daytime step = full brightness
+        return {
+            "ignition": cls.IGNITION_STATES.get((data[0] >> 4) & 0x0F, "unknown"),
+            "parklamps": bool(((data[0] >> 2) & 0x03) == 1),
+            "key_in": bool((data[1] >> 3) & 0x01),
+            # 1 = Day, 2 = Night; 0/3 mean the truck isn't saying.
+            "night": True if dn == 2 else (False if dn == 1 else None),
+            "dim": dim,
+            "dim_raw": raw_dim,
+            "parking_brake": bool((data[6] >> 7) & 0x01),
+        }
 
     @classmethod
     def decode_tpms(cls, data):
@@ -2357,6 +2415,7 @@ class Telemetry:
                     self._body_is_demo = False
                     self.doors = None
                     self.tires = None
+                    self.body = None
                 # One-time VIN read per link -> auto-identify the vehicle
                 # (make/model/year + powertrain, so a PowerBoost is known as a
                 # hybrid). Decoded online via NHTSA, offline via WMI fallback.
@@ -2415,6 +2474,10 @@ class Telemetry:
                         self.doors = st
                     else:
                         self.doors = None
+                    # Decoded from the same frame as the doors, so it's only
+                    # ever as fresh as they are -- and only exists on the
+                    # frame path, not the DID fallback.
+                    self.body = getattr(self.raw, "last_body", None)
                 # TPMS: the 0x3B5 broadcast, one ID along from the doors on the
                 # same bus. Polled far more slowly than the doors -- tyre
                 # pressure moves over minutes, not seconds, and each read costs
@@ -2500,6 +2563,10 @@ class Telemetry:
             "obd_port": self.obd_port,
             "doors": getattr(self, "doors", None),
             "tires": getattr(self, "tires", None),
+            # Ignition, lamps and the truck's own dash dimmer -- drives the
+            # screen's night dimming so GOST follows the dash instead of
+            # guessing from the clock.
+            "body": getattr(self, "body", None),
             "carplay": carplay_dongle(),
         }
 

@@ -134,6 +134,55 @@ check("absurd value rejected",
 check("flat tyre still reported",
       RawOBD.decode_tpms(kpa_frame(241, 241, 241, 138))["rl"], 20.0)
 
+print("8. the non-door half of 0x3B3 (ignition / lamps / dash dimmer)")
+
+
+def body(b0=0, b1=0, b3=0, b6=0):
+    d = [0] * 8
+    d[0], d[1], d[3], d[6] = b0, b1, b3, b6
+    return RawOBD.decode_body(d)
+
+
+# Ignition_Status is byte 0 bits 7-4: 1 off, 2 accessory, 4 run, 8 start.
+for raw, want in [(1, "off"), (2, "accessory"), (4, "run"), (8, "start"),
+                  (15, "invalid"), (0, "unknown")]:
+    check("ignition %d -> %s" % (raw, want), body(b0=raw << 4)["ignition"], want)
+# Byte 0 also holds the tailgate (bit 0) and parklamps (bits 3-2). Ignition
+# must not bleed into them or vice versa.
+check("ignition ignores the tailgate bit", body(b0=(4 << 4) | 0x01)["ignition"], "run")
+check("parklamps on", body(b0=1 << 2)["parklamps"], True)
+check("parklamps off", body(b0=0)["parklamps"], False)
+check("parklamps ignore ignition", body(b0=(4 << 4) | (1 << 2))["parklamps"], True)
+
+# Day_Night_Status is byte 1 bits 7-6: 1 Day, 2 Night, 0/3 no opinion.
+check("day", body(b1=1 << 6)["night"], False)
+check("night", body(b1=2 << 6)["night"], True)
+check("null -> unknown", body(b1=0)["night"], None)
+check("notused -> unknown", body(b1=3 << 6)["night"], None)
+check("key in ignition", body(b1=1 << 3)["key_in"], True)
+check("key_in ignores day/night", body(b1=(2 << 6) | (1 << 3))["key_in"], True)
+check("night ignores key_in", body(b1=(2 << 6) | (1 << 3))["night"], True)
+
+# Dimming_Lvl is all of byte 3: 0 off, 1-12 night steps, 13-18 day steps.
+check("dimmer off -> 0.0", body(b3=0)["dim"], 0.0)
+check("Night_1 -> dimmest", body(b3=1)["dim"], 1 / 12.0)
+check("Night_12 -> full", body(b3=12)["dim"], 1.0)
+check("Day_1 -> full", body(b3=13)["dim"], 1.0)
+check("Day_6 -> full", body(b3=18)["dim"], 1.0)
+check("unknown (254) -> None, don't blank the screen", body(b3=254)["dim"], None)
+check("invalid (255) -> None", body(b3=255)["dim"], None)
+
+check("parking brake set", body(b6=0x80)["parking_brake"], True)
+check("parking brake clear", body(b6=0x7F)["parking_brake"], False)
+
+# The door bits and the body bits share bytes 6 and 7 -- prove they coexist.
+d = payload(rl=True, fl=True)
+d[6] |= 0x80          # parking brake on, same byte as the rear-door bits
+check("parking brake doesn't disturb doors",
+      [k for k, v in RawOBD.decode_doors(d).items() if v], ["rl", "fl"])
+check("doors don't disturb parking brake",
+      RawOBD.decode_body(d)["parking_brake"], True)
+
 print()
 if fails:
     print("FAILED: %d" % len(fails))

@@ -734,6 +734,15 @@ body.osk-open #app { padding-bottom:44vh; }
  * the middle of the screen is annoying on the touchscreen). */
 html[data-pointer="touch"], html[data-pointer="touch"] *,
 [data-touch], [data-touch] * { cursor: none !important; }
+/* Night dimming overlay. pointer-events:none is what makes this safe -- it
+ * covers the whole screen, so without it the entire UI would stop taking
+ * taps. The transition is slow on purpose: pulling under a streetlight
+ * shouldn't strobe the dash. Opacity is set from the truck's dimmer. */
+#night-dim {
+  position: fixed; inset: 0; z-index: 9999;
+  background: #000; opacity: 0; pointer-events: none;
+  transition: opacity 1.2s ease;
+}
 </style>
 </head>
 <body>
@@ -975,6 +984,17 @@ html[data-pointer="touch"], html[data-pointer="touch"] *,
             <button data-focus id="unit-kml-btn">KM/L</button>
           </div>
         </div>
+        <div class="frame" data-title="DISPLAY">
+          <div class="settings-row">
+            <span class="dim">NIGHT DIMMING:</span>
+            <button data-focus id="dim-auto-btn">AUTO</button>
+            <button data-focus id="dim-off-btn">OFF</button>
+          </div>
+          <div class="dim" style="font-size:11px;">
+            AUTO follows the truck's own dash dimmer, so the screen darkens
+            with the instrument cluster. Needs the body frame (0x3B3).
+          </div>
+        </div>
         <div class="frame" data-title="VEHICLE PROFILE">
           <div class="settings-row">
             <span class="dim">BODY:</span>
@@ -1115,6 +1135,11 @@ html[data-pointer="touch"], html[data-pointer="touch"] *,
   <!-- On-screen keyboard: auto-appears when you tap a text field and no
        physical keyboard has been used (touchscreen-only head unit). -->
   <div id="osk" class="hidden" aria-hidden="true"></div>
+
+  <!-- Night dimming. Sits above everything and swallows no input; the truck's
+       own dash dimmer drives its opacity, so GOST darkens exactly when the
+       instrument cluster does instead of guessing from the clock. -->
+  <div id="night-dim" aria-hidden="true"></div>
 </div>
 
 <script src="vendor/pmtiles.js"></script>
@@ -2346,6 +2371,41 @@ const GRAPH_CHANNELS = [
   { id: "hp", label: () => "HP (est)", get: (v, d) => d.hp },
 ];
 
+/* NIGHT DIMMING -- follows the truck's own dash dimmer (0x3B3 Dimming_Lvl /
+ * Day_Night_Status), so the screen darkens exactly when the instrument
+ * cluster does. That beats a clock-based rule, which is wrong in tunnels, in
+ * parking garages, and for anyone who's turned their dash lights up or down.
+ *
+ * Deliberately conservative: it never goes fully black (you still have to be
+ * able to read the map at night), it ignores frames the truck marks unknown
+ * rather than lurching, and it does nothing at all in daylight. */
+const NightDim = {
+  MAX_DIM: 0.62,          // darkest we'll ever go
+  applied: null,
+  apply(t) {
+    const box = $("#night-dim");
+    if (!box) return;
+    if (Config.data.night_dim === "off") {
+      if (this.applied !== 0) { box.style.opacity = "0"; this.applied = 0; }
+      return;
+    }
+    const b = t && t.body;
+    // No body frame, or the truck says it doesn't know: leave the screen
+    // exactly as it is. Guessing here is worse than doing nothing.
+    if (!b || b.night !== true || b.dim == null) {
+      if (this.applied === null) return;
+      if (b && b.night === false && this.applied !== 0) {
+        box.style.opacity = "0"; this.applied = 0;   // daylight: full bright
+      }
+      return;
+    }
+    // b.dim is 0..1 where 1 = dimmer wound fully up. Invert it into how much
+    // black to lay over the screen.
+    const op = Math.round(this.MAX_DIM * (1 - b.dim) * 100) / 100;
+    if (op !== this.applied) { box.style.opacity = String(op); this.applied = op; }
+  },
+};
+
 const LiveGraph = {
   buf: [], max: 150, pid: "RPM", unitSig: "",
   channel() {
@@ -2545,6 +2605,7 @@ function renderDrive(t) {
 const HudGhost = { history: [] };
 function renderHud(t) {
   LiveGraph.push(t);          // the live graph lives on the driving screen
+  NightDim.apply(t);          // follow the truck's dash dimmer
   // --- DRIVING VIEW (bailey: "the hud is where the driving information
   // should be") -- big speed, engine/battery mode, fuel + range, gauges.
   const v = (t && t.values) || {}, d = (t && t.derived) || {};
@@ -5104,6 +5165,18 @@ function buildSettings() {
   $("#unit-mpg-btn").addEventListener("click", () => setUnit("units_econ", "MPG"));
   $("#unit-kml-btn").addEventListener("click", () => setUnit("units_econ", "KML"));
   updateUnitButtons();
+  const setDim = (v) => {
+    Config.set("night_dim", v);
+    updateDimButtons();
+    // Take effect now rather than on the next telemetry frame -- and when
+    // switching back to AUTO, forget what we'd applied so the next frame is
+    // treated as a fresh decision.
+    NightDim.applied = null;
+    if (v === "off") NightDim.apply(null);
+  };
+  $("#dim-auto-btn").addEventListener("click", () => setDim("auto"));
+  $("#dim-off-btn").addEventListener("click", () => setDim("off"));
+  updateDimButtons();
   LiveGraph.buildOptions();   // picker is empty markup until this runs
   $("#wifi-scan-btn").addEventListener("click", () => Wifi.open());
   $("#tv-guide-btn").addEventListener("click", () => TvGuide.toggle());
@@ -5248,6 +5321,12 @@ function updateSourceButtons() {
 }
 /* Units (bailey): one place decides F-vs-C and MPG-vs-KM/L; HUD converts,
  * DRIVE's raw table stays in the truck's native units by design. */
+function updateDimButtons() {
+  const off = Config.data.night_dim === "off";   // AUTO is the default
+  const a = $("#dim-auto-btn"), o = $("#dim-off-btn");
+  if (a) a.classList.toggle("selected", !off);
+  if (o) o.classList.toggle("selected", off);
+}
 function unitTemp() { return Config.data.units_temp === "C" ? "C" : "F"; }
 function unitEcon() { return Config.data.units_econ === "KML" ? "KML" : "MPG"; }
 function econTxt(mpg) {
