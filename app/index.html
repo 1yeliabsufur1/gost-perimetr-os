@@ -2073,7 +2073,9 @@ const Demo = {
     this.running = true;
     this.t0 = Date.now();
     updateConnIndicator();
-    renderAbout({ version: "3.0.0 (DEMO)", hostname: "browser", uptime_sec: null });
+    // Browser-preview fallback only -- on the Pi the backend reports the real
+    // VERSION file. Keep this in step with VERSION when cutting a release.
+    renderAbout({ version: "3.1.0 (DEMO)", hostname: "browser", uptime_sec: null });
     Nav.startDemoFix();
     this.timer = setInterval(() => this.tick(), 200);
   },
