@@ -330,6 +330,105 @@
 [data-theme="vrchat"] .tv-chan-row:hover, [data-theme="vrchat"] .tv-chan-row:focus {
   border-color:var(--warn); box-shadow:0 0 16px rgba(255,79,163,0.45);
 }
+/* ---------- XBOX (the ORIGINAL, 2001 -- not the 360) ----------
+   The 2001 dashboard is one of the most distinctive UIs ever shipped: a black
+   void, a glowing green nucleus in the middle, and slow translucent liquid
+   blobs writhing around it. Everything here serves that: yellow-green (the
+   console's translucent plastic and the jewel, NOT the flat #107C10 the brand
+   moved to later), organic movement, and a lot of black.
+   Rajdhani stands in for the dash's squared-off techy sans -- already
+   vendored for the VRChat/cyberpunk themes, so it costs nothing to reuse. */
+[data-theme="xbox"] {
+  --pri:#b9e84a; --dim:#5c8f22; --bg:#020600; --warn:#ff5b2e; --glow:#8fd400; --line:#4c7d16;
+  --font:"Rajdhani","Segoe UI",system-ui,sans-serif; --display:"Rajdhani",sans-serif;
+  --scan:0.08; --radius:16px; --letter:0.6px; --fsize:17px;
+  --bg-grad:radial-gradient(ellipse at 50% 46%, #0d2103 0%, #071302 38%, #020600 76%);
+  --panel-glow:0 0 28px rgba(143,212,0,0.16), inset 0 0 34px rgba(143,212,0,0.07);
+  --btn-glow:0 0 14px rgba(143,212,0,0.25);
+  --thumb-filter:saturate(1.15) contrast(1.05) brightness(0.98);
+}
+/* THE BLOBS. Four translucent green masses on long, mismatched periods so they
+   drift in and out of phase and never visibly loop. The blur is what sells it
+   as liquid rather than four circles -- without it this reads as a lava lamp
+   made of hard edges. Kept to four and to transform-only animation: this runs
+   on a Pi behind a live map and a video player. */
+[data-theme="xbox"] body::before {
+  content:""; position:fixed; inset:-25%; z-index:-1; pointer-events:none;
+  background:
+    radial-gradient(38% 30% at 22% 30%, rgba(143,212,0,0.30), transparent 68%),
+    radial-gradient(30% 26% at 76% 24%, rgba(107,190,0,0.24), transparent 70%),
+    radial-gradient(34% 32% at 68% 76%, rgba(160,225,40,0.22), transparent 68%),
+    radial-gradient(26% 22% at 30% 80%, rgba(90,170,0,0.26), transparent 70%);
+  filter:blur(26px);
+  animation:xbBlobs 34s ease-in-out infinite alternate;
+}
+@keyframes xbBlobs {
+  0%   { transform:translate3d(0,0,0) scale(1); }
+  33%  { transform:translate3d(2.5%,-3%,0) scale(1.10); }
+  66%  { transform:translate3d(-3%,2%,0) scale(0.96); }
+  100% { transform:translate3d(1.5%,3.5%,0) scale(1.06); }
+}
+/* The nucleus: the green jewel breathing at the centre of the dash, over a
+   vignette that keeps the edges black so text stays readable on top of it. */
+[data-theme="xbox"] body::after {
+  content:""; position:fixed; inset:0; z-index:-1; pointer-events:none;
+  background:
+    radial-gradient(circle at 50% 47%, rgba(180,240,60,0.16) 0%, rgba(143,212,0,0.07) 16%, transparent 40%),
+    radial-gradient(ellipse at 50% 47%, transparent 46%, rgba(0,0,0,0.72) 100%);
+  animation:xbNucleus 7s ease-in-out infinite;
+}
+@keyframes xbNucleus { 0%,100% { opacity:0.75; } 50% { opacity:1; } }
+/* Panels as the console's translucent green plastic: dark, slightly glassy,
+   lit from inside. */
+[data-theme="xbox"] .frame {
+  background:linear-gradient(160deg, rgba(16,38,4,0.66), rgba(6,16,2,0.60));
+  border:1px solid rgba(143,212,0,0.34);
+  -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px);
+  box-shadow:0 0 26px rgba(143,212,0,0.14), inset 0 0 30px rgba(143,212,0,0.07),
+             inset 0 1px 0 rgba(190,255,90,0.14);
+}
+[data-theme="xbox"] .frame::before {
+  content:attr(data-title); top:-13px; padding:3px 15px 4px; letter-spacing:2.5px;
+  border-radius:999px; font-weight:700; border:none;
+  background:linear-gradient(90deg, #8fd400, #b9e84a);
+  color:#081400; box-shadow:0 0 18px rgba(143,212,0,0.55);
+}
+/* Dashboard menu items: rounded slabs that flood with green when you land on
+   them, the way the blade menu highlighted. */
+[data-theme="xbox"] button {
+  background:rgba(14,32,4,0.78); border:1px solid rgba(143,212,0,0.42);
+  border-radius:999px; padding:8px 18px; color:var(--pri);
+  text-shadow:0 0 8px rgba(143,212,0,0.5); font-weight:600;
+}
+[data-theme="xbox"] button:hover, [data-theme="xbox"] button:focus {
+  background:rgba(34,74,6,0.9); border-color:var(--pri);
+  box-shadow:0 0 22px rgba(143,212,0,0.5), inset 0 0 20px rgba(143,212,0,0.18);
+}
+[data-theme="xbox"] .selected, [data-theme="xbox"] .selected:focus {
+  background:linear-gradient(90deg, #6bbe00, #b9e84a) !important;
+  color:#081400 !important; text-shadow:none !important;
+  box-shadow:0 0 24px rgba(143,212,0,0.72) !important;
+}
+[data-theme="xbox"] .glow {
+  color:#e4ffa8;
+  text-shadow:0 0 8px var(--glow), 0 0 22px rgba(143,212,0,0.62), 0 0 44px rgba(143,212,0,0.32);
+}
+[data-theme="xbox"] .tv-chan-row {
+  background:rgba(14,32,4,0.55); border:1px solid rgba(143,212,0,0.24); border-radius:12px;
+}
+[data-theme="xbox"] .tv-chan-row:hover, [data-theme="xbox"] .tv-chan-row:focus {
+  border-color:var(--pri); box-shadow:0 0 16px rgba(143,212,0,0.42);
+}
+[data-theme="xbox"] #clock, [data-theme="xbox"] .osd-num {
+  font-family:var(--display); letter-spacing:1px;
+}
+/* Anyone prone to motion sickness, or running this on a weaker board, gets
+   the palette without the churn. */
+@media (prefers-reduced-motion: reduce) {
+  [data-theme="xbox"] body::before,
+  [data-theme="xbox"] body::after { animation:none; }
+}
+
 /* red SOUL heart as the focus cursor -- straight out of the UT menu */
 [data-theme="undertale"] [data-focus]:focus { outline:none; box-shadow:none; position:relative; }
 [data-theme="undertale"] [data-focus]:focus::after {
@@ -1169,6 +1268,7 @@ const THEMES = [
   {id:"minecraft", name:"MINECRAFT"},
   {id:"backrooms", name:"THE BACKROOMS"},
   {id:"vrchat", name:"VRCHAT"},
+  {id:"xbox", name:"XBOX (ORIGINAL)"},
 ];
 const WEEKDAYS = ["sun","mon","tue","wed","thu","fri","sat"];
 
